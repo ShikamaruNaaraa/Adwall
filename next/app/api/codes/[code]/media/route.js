@@ -1,0 +1,38 @@
+import { NextResponse } from "next/server";
+import { mkdir, writeFile } from "fs/promises";
+import path from "path";
+import { getEntry, setMedia } from "../../../../../lib/store";
+
+const MEDIA_DIR = path.join(process.cwd(), "media_files");
+
+function mediaTypeFor(fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  const videoExts = [".mp4", ".mov", ".webm", ".mkv"];
+  return videoExts.includes(ext) ? "video" : "image";
+}
+
+export async function POST(request, { params }) {
+  const { code } = await params;
+
+  const entry = getEntry(code);
+  if (!entry) {
+    return NextResponse.json({ detail: "Unknown or expired code" }, { status: 404 });
+  }
+
+  const form = await request.formData();
+  const file = form.get("file");
+  if (!file || typeof file === "string") {
+    return NextResponse.json({ detail: "file is required" }, { status: 400 });
+  }
+
+  await mkdir(MEDIA_DIR, { recursive: true });
+  const safeName = `${code}-${Date.now()}${path.extname(file.name)}`;
+  const filePath = path.join(MEDIA_DIR, safeName);
+  const bytes = Buffer.from(await file.arrayBuffer());
+  await writeFile(filePath, bytes);
+
+  const mediaUrl = `/media/${safeName}`;
+  setMedia(code, { mediaType: mediaTypeFor(file.name), mediaUrl });
+
+  return NextResponse.json({ media_url: mediaUrl });
+}
