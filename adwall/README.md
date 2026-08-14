@@ -1,6 +1,6 @@
 # adwall
 
-A new Flutter project.
+A new adwall project.
 
 ## Getting Started
 
