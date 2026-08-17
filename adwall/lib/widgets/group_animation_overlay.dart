@@ -73,8 +73,7 @@ class GroupAnimationOverlay extends StatefulWidget {
 class _GroupAnimationOverlayState extends State<GroupAnimationOverlay>
     with SingleTickerProviderStateMixin {
   Ticker? _ticker;
-  double _localProgress = 0; // 0..1 while this screen is "lit", else outside range.
-  bool _finished = false;
+  double _localProgress = -1; // 0..1 while this screen is "lit", else outside range.
 
   @override
   void initState() {
@@ -86,22 +85,18 @@ class _GroupAnimationOverlayState extends State<GroupAnimationOverlay>
     final cue = widget.cue;
     final totalMs = cue.durationPerScreenMs * cue.total;
     final elapsedMs = DateTime.now().millisecondsSinceEpoch - cue.startAt;
-    final globalProgress = totalMs <= 0 ? 0.0 : elapsedMs / totalMs;
-    final local = globalProgress * cue.total - cue.index;
 
     if (elapsedMs < 0) {
       // Hasn't started yet (still catching up to the shared startAt).
       if (_localProgress != -1) setState(() => _localProgress = -1);
       return;
     }
-    if (globalProgress >= 1) {
-      if (!_finished) {
-        _finished = true;
-        _ticker?.stop();
-        widget.onDone();
-      }
-      return;
-    }
+    // Looped indefinitely: once the sweep reaches the right edge of the
+    // last TV, the next lap starts again from the left edge of the first
+    // TV, so it keeps scrolling forever until a new cue replaces this one.
+    final loopedElapsedMs = totalMs <= 0 ? 0 : elapsedMs % totalMs;
+    final globalProgress = totalMs <= 0 ? 0.0 : loopedElapsedMs / totalMs;
+    final local = globalProgress * cue.total - cue.index;
     setState(() => _localProgress = local.clamp(-1.0, 2.0));
   }
 
