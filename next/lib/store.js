@@ -408,7 +408,15 @@ function notifyAnimation(entry, payload) {
 // but still counted in `total` so remaining screens keep correct spacing.
 export function playGroupAnimation(
   id,
-  { durationPerScreenMs = 1500, color = "#22C55E", startDelayMs = 600 } = {}
+  {
+    durationPerScreenMs = 1500,
+    color = "#22C55E",
+    startDelayMs = 600,
+    text = "",
+    textColor = "#FFFFFF",
+    textFontSize = 48,
+    textPositionY = 0.5,
+  } = {}
 ) {
   const group = groups.get(id);
   if (!group) return null;
@@ -425,6 +433,10 @@ export function playGroupAnimation(
       startAt,
       durationPerScreenMs,
       color,
+      text,
+      textColor,
+      textFontSize,
+      textPositionY,
     });
     sentTo += 1;
   });

@@ -17,6 +17,10 @@ class GroupAnimationCue {
     required this.startAt,
     required this.durationPerScreenMs,
     required this.color,
+    this.text = '',
+    this.textColor = '#FFFFFF',
+    this.textFontSize = 48,
+    this.textPositionY = 0.5,
   });
 
   factory GroupAnimationCue.fromJson(Map<String, dynamic> json) => GroupAnimationCue(
@@ -26,6 +30,10 @@ class GroupAnimationCue {
         startAt: (json['startAt'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
         durationPerScreenMs: (json['durationPerScreenMs'] as num?)?.toInt() ?? 1500,
         color: json['color'] as String? ?? '#22C55E',
+        text: json['text'] as String? ?? '',
+        textColor: json['textColor'] as String? ?? '#FFFFFF',
+        textFontSize: (json['textFontSize'] as num?)?.toDouble() ?? 48,
+        textPositionY: (json['textPositionY'] as num?)?.toDouble() ?? 0.5,
       );
 
   final String groupId;
@@ -34,6 +42,10 @@ class GroupAnimationCue {
   final int startAt; // epoch ms, shared across every TV in the group.
   final int durationPerScreenMs;
   final String color;
+  final String text;
+  final String textColor;
+  final double textFontSize;
+  final double textPositionY; // 0 (top) .. 1 (bottom)
 }
 
 /// Renders a snake/comet that sweeps left-to-right across this TV, timed
@@ -105,18 +117,58 @@ class _GroupAnimationOverlayState extends State<GroupAnimationOverlay>
     return Color(0xFF000000 | value);
   }
 
+  Color get _textColor {
+    final hex = widget.cue.textColor.replaceFirst('#', '');
+    final value = int.tryParse(hex, radix: 16) ?? 0xFFFFFF;
+    return Color(0xFF000000 | value);
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Only paint while the snake is actually within (or just entering/
-    // leaving) this screen - otherwise stay fully transparent so the ad
-    // underneath keeps showing.
-    if (_localProgress < -0.05 || _localProgress > 1.05) {
+    final hasText = widget.cue.text.trim().isNotEmpty;
+    // The text needs extra run-up/run-off room beyond the screen edges so it
+    // slides fully in from the left and fully out to the right instead of
+    // popping in/out, so its visible range is wider than the snake's.
+    final lowerBound = hasText ? -0.4 : -0.05;
+    final upperBound = hasText ? 1.4 : 1.05;
+    if (_localProgress < lowerBound || _localProgress > upperBound) {
       return const SizedBox.expand();
     }
+    final progress = _localProgress.clamp(lowerBound, upperBound);
     return IgnorePointer(
       child: SizedBox.expand(
-        child: CustomPaint(
-          painter: _SnakePainter(progress: _localProgress.clamp(0.0, 1.0), color: _color),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            CustomPaint(
+              painter: _SnakePainter(progress: progress.clamp(0.0, 1.0), color: _color),
+            ),
+            if (hasText)
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final x = progress * constraints.maxWidth;
+                  final y = widget.cue.textPositionY.clamp(0.0, 1.0) *
+                      constraints.maxHeight;
+                  return Positioned(
+                    left: x,
+                    top: y,
+                    child: FractionalTranslation(
+                      translation: const Offset(-0.5, -0.5),
+                      child: Text(
+                        widget.cue.text,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                          color: _textColor,
+                          fontSize: widget.cue.textFontSize,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
         ),
       ),
     );

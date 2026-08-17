@@ -24,6 +24,18 @@ export async function POST(request, { params }) {
   if (body?.color !== undefined) {
     options.color = String(body.color);
   }
+  if (body?.text !== undefined) {
+    options.text = String(body.text);
+  }
+  if (body?.text_color !== undefined) {
+    options.textColor = String(body.text_color);
+  }
+  if (body?.text_font_size !== undefined) {
+    options.textFontSize = Number(body.text_font_size) || 48;
+  }
+  if (body?.text_position_y !== undefined) {
+    options.textPositionY = Number(body.text_position_y);
+  }
 
   const result = playGroupAnimation(id, options);
   if (!result) {
