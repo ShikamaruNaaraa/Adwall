@@ -111,12 +111,22 @@ class PairingService {
   /// (GET /api/codes/{code}/events). Emits a map with 'status'
   /// ('pending'/'paired'), 'nickname', 'media_type', 'media_url' each time
   /// the server sends one - starting with the current state on connect.
+  /// Reconnects automatically (with a short delay) if the underlying HTTP
+  /// stream ends or errors for any reason other than the caller cancelling
+  /// the subscription, so a dropped connection doesn't silently stop
+  /// delivering updates (e.g. playlist/ad removals) until the app restarts.
   Stream<Map<String, dynamic>> watchPairing(String code) {
     final controller = StreamController<Map<String, dynamic>>();
-    final client = http.Client();
-    controller.onCancel = client.close;
+    http.Client? activeClient;
+    var cancelled = false;
+    controller.onCancel = () {
+      cancelled = true;
+      activeClient?.close();
+    };
 
-    () async {
+    Future<void> connectOnce() async {
+      final client = http.Client();
+      activeClient = client;
       try {
         final request = http.Request('GET', _uri('/api/codes/$code/events'));
         final response = await client.send(request);
@@ -126,12 +136,12 @@ class PairingService {
               'Failed to open status stream (${response.statusCode})',
             ),
           );
-          await controller.close();
           return;
         }
 
         var buffer = '';
         await for (final chunk in response.stream.transform(utf8.decoder)) {
+          if (cancelled) return;
           buffer += chunk;
           // SSE frames are separated by a blank line; each frame may have
           // one or more "data: ..." lines.
@@ -153,13 +163,23 @@ class PairingService {
             }
           }
         }
-        await controller.close();
       } catch (e) {
-        controller.addError(PairingException(e.toString()));
-        await controller.close();
+        if (!cancelled) controller.addError(PairingException(e.toString()));
       } finally {
         client.close();
       }
+    }
+
+    () async {
+      while (!cancelled) {
+        await connectOnce();
+        if (cancelled) break;
+        // The stream ended (server restart, network hiccup, proxy timeout,
+        // etc.) without the caller cancelling - reconnect after a short
+        // delay instead of leaving this subscription dead.
+        await Future.delayed(const Duration(seconds: 3));
+      }
+      if (!controller.isClosed) await controller.close();
     }();
 
     return controller.stream;
@@ -576,6 +596,32 @@ class PairingService {
     return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  /// Admin side: set (or clear, by passing an empty [text]) the text
+  /// overlay that hands off across this group's TVs the same way the
+  /// media does.
+  Future<TvGroup> setGroupAnimationText(
+    String id, {
+    required String text,
+    required String color,
+    required double size,
+    required String position,
+  }) async {
+    final res = await http.patch(
+      _uri('/api/groups/$id/text'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'text': text,
+        'color': color,
+        'size': size,
+        'position': position,
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
   /// TV side: reports that this TV finished playing the group animation at
   /// [index] (its position in the group's order), so the backend can hand
   /// off to the next TV in the list.
@@ -715,6 +761,10 @@ class TvGroup {
     this.animationMediaUrl,
     this.animationMediaType,
     this.animationDurationSeconds = 8,
+    this.animationText,
+    this.animationTextColor = '#FFFFFF',
+    this.animationTextSize = 48,
+    this.animationTextPosition = 'center',
   });
 
   factory TvGroup.fromJson(Map<String, dynamic> json) => TvGroup(
@@ -727,6 +777,10 @@ class TvGroup {
         animationMediaType: json['animationMediaType'] as String?,
         animationDurationSeconds:
             (json['animationDurationSeconds'] as num?)?.toInt() ?? 8,
+        animationText: json['animationText'] as String?,
+        animationTextColor: json['animationTextColor'] as String? ?? '#FFFFFF',
+        animationTextSize: (json['animationTextSize'] as num?)?.toDouble() ?? 48,
+        animationTextPosition: json['animationTextPosition'] as String? ?? 'center',
       );
 
   final String id;
@@ -744,5 +798,20 @@ class TvGroup {
   /// own natural end instead.
   final int animationDurationSeconds;
 
-  bool get hasAnimation => animationMediaUrl != null && animationMediaUrl!.isNotEmpty;
+  /// Text overlay that slides across the group's TVs the same way the
+  /// media does - null/empty means no text overlay is configured.
+  final String? animationText;
+
+  /// Hex color (e.g. '#FFFFFF') for [animationText].
+  final String animationTextColor;
+
+  /// Font size for [animationText].
+  final double animationTextSize;
+
+  /// Where [animationText] sits on screen: 'top' | 'center' | 'bottom'.
+  final String animationTextPosition;
+
+  bool get hasMedia => animationMediaUrl != null && animationMediaUrl!.isNotEmpty;
+  bool get hasText => animationText != null && animationText!.trim().isNotEmpty;
+  bool get hasAnimation => hasMedia || hasText;
 }

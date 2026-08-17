@@ -363,6 +363,10 @@ export function createGroup(name, tvCodes) {
     animationMediaUrl: null,
     animationMediaType: null, // 'image' | 'video'
     animationDurationSeconds: 8, // only used for images; videos play to their own end
+    animationText: null,
+    animationTextColor: "#FFFFFF",
+    animationTextSize: 48,
+    animationTextPosition: "center", // 'top' | 'center' | 'bottom'
     playback: null, // { index } while mid-sequence, else null
   };
   groups.set(group.id, group);
@@ -396,6 +400,24 @@ export function setGroupAnimationMedia(id, { mediaUrl, mediaType, durationSecond
   group.animationMediaUrl = mediaUrl;
   group.animationMediaType = mediaType;
   if (durationSeconds !== undefined) group.animationDurationSeconds = durationSeconds;
+  group.playback = null;
+  return group;
+}
+
+// Attaches (or replaces) the text overlay that hands off across this
+// group's TVs the same way the media does - each TV slides it in from one
+// side and out the other before the next TV in the order picks it up.
+export function setGroupAnimationText(id, { text, color, size, position }) {
+  const group = groups.get(id);
+  if (!group) return null;
+  if (text !== undefined) group.animationText = text || null;
+  if (color !== undefined) group.animationTextColor = color || "#FFFFFF";
+  if (size !== undefined) group.animationTextSize = Number(size) > 0 ? Number(size) : 48;
+  if (position !== undefined) {
+    group.animationTextPosition = ["top", "center", "bottom"].includes(position)
+      ? position
+      : "center";
+  }
   group.playback = null;
   return group;
 }
@@ -435,6 +457,10 @@ function sendToIndex(group, index) {
     mediaUrl: group.animationMediaUrl,
     mediaType: group.animationMediaType,
     durationSeconds: group.animationDurationSeconds,
+    text: group.animationText || null,
+    textColor: group.animationTextColor || "#FFFFFF",
+    textSize: group.animationTextSize || 48,
+    textPosition: group.animationTextPosition || "center",
   });
   group.playback = { index };
   return true;
@@ -446,7 +472,7 @@ function sendToIndex(group, index) {
 export function playGroupAnimation(id) {
   const group = groups.get(id);
   if (!group) return null;
-  if (!group.animationMediaUrl) {
+  if (!group.animationMediaUrl && !group.animationText) {
     return { error: "no_media" };
   }
   group.playback = null;

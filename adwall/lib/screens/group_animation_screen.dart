@@ -214,6 +214,133 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
     }
   }
 
+  /// Lets the admin set (or clear) the text overlay that hands off across
+  /// this group's TVs the same way the media animation does.
+  Future<void> _editText(TvGroup group) async {
+    final textController = TextEditingController(text: group.animationText ?? '');
+    final sizeController =
+        TextEditingController(text: group.animationTextSize.toStringAsFixed(0));
+    var color = group.animationTextColor;
+    var position = group.animationTextPosition;
+    const colorChoices = <String>[
+      '#FFFFFF',
+      '#000000',
+      '#FF3B30',
+      '#FFCC00',
+      '#34C759',
+      '#0A84FF',
+    ];
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Group text overlay'),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: textController,
+                  autofocus: true,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Text',
+                    hintText: 'e.g. Grand opening!',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: sizeController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Font size',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  initialValue: position,
+                  decoration: const InputDecoration(
+                    labelText: 'Position',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'top', child: Text('Top')),
+                    DropdownMenuItem(value: 'center', child: Text('Center')),
+                    DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => position = value);
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Text('Color', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  children: [
+                    for (final choice in colorChoices)
+                      GestureDetector(
+                        onTap: () => setDialogState(() => color = choice),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: Color(
+                              int.parse('FF${choice.replaceFirst('#', '')}', radix: 16),
+                            ),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: color == choice
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Colors.grey.shade400,
+                              width: color == choice ? 3 : 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved != true) return;
+
+    final size = double.tryParse(sizeController.text) ?? group.animationTextSize;
+    try {
+      await widget.pairingService.setGroupAnimationText(
+        group.id,
+        text: textController.text.trim(),
+        color: color,
+        size: size,
+        position: position,
+      );
+      await _refresh();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to save text: $e')));
+      }
+    }
+  }
+
   Future<void> _playGroup(TvGroup group) async {
     if (!group.hasAnimation) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -371,24 +498,22 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                           Row(
                             children: [
                               Icon(
-                                group.hasAnimation
+                                group.hasMedia
                                     ? (group.animationMediaType == 'video'
                                         ? Icons.movie_outlined
                                         : Icons.image_outlined)
                                     : Icons.image_not_supported_outlined,
                                 size: 18,
-                                color: group.hasAnimation ? null : Colors.grey,
+                                color: group.hasMedia ? null : Colors.grey,
                               ),
                               const SizedBox(width: 6),
                               Expanded(
                                 child: Text(
-                                  group.hasAnimation
+                                  group.hasMedia
                                       ? '${group.animationMediaType == 'video' ? 'Video' : 'Image'} animation added'
                                       : 'No animation added yet',
                                   style: TextStyle(
-                                    color: group.hasAnimation
-                                        ? null
-                                        : Colors.grey,
+                                    color: group.hasMedia ? null : Colors.grey,
                                   ),
                                 ),
                               ),
@@ -405,8 +530,37 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                                       )
                                     : const Icon(Icons.upload_outlined, size: 18),
                                 label: Text(
-                                  group.hasAnimation ? 'Replace' : 'Add animation',
+                                  group.hasMedia ? 'Replace' : 'Add animation',
                                 ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                group.hasText
+                                    ? Icons.text_fields
+                                    : Icons.text_fields_outlined,
+                                size: 18,
+                                color: group.hasText ? null : Colors.grey,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  group.hasText
+                                      ? "Text: '${group.animationText}'"
+                                      : 'No text overlay set',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: group.hasText ? null : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              TextButton.icon(
+                                onPressed: () => _editText(group),
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                label: Text(group.hasText ? 'Edit text' : 'Add text'),
                               ),
                             ],
                           ),
