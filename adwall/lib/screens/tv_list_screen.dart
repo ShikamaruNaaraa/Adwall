@@ -324,6 +324,25 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     }
   }
 
+  Future<void> _removeItem(int index) async {
+    final removed = _playlist[index];
+    setState(() => _playlist.removeAt(index));
+    try {
+      final updated = await widget.pairingService.removePlaylistItem(
+        widget.tv.code,
+        index: index,
+      );
+      if (mounted) setState(() => _playlist = updated);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _playlist.insert(index, removed);
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -393,9 +412,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.remove_circle_outline),
-                                  onPressed: () {
-                                    setState(() => _playlist.removeAt(index));
-                                  },
+                                  onPressed: () => _removeItem(index),
                                 ),
                               ],
                             ),

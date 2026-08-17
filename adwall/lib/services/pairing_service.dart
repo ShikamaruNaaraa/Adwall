@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -353,6 +354,19 @@ class PairingService {
         .toList();
   }
 
+  /// Admin side: remove one ad already on a TV's playlist (identified by
+  /// its position).
+  Future<List<PlaylistItem>> removePlaylistItem(String code, {required int index}) async {
+    final res = await http.delete(_uri('/api/codes/$code/playlist?index=$index'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['playlist'] as List<dynamic>)
+        .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
   /// Admin side: set a TV's display orientation ('landscape' or 'portrait').
   /// The TV app receives this over its live SSE stream and rotates its
   /// playback layout to match.
@@ -367,6 +381,40 @@ class PairingService {
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return body['orientation'] as String;
+  }
+
+  static const _settingsChannel = MethodChannel('adwall/settings');
+
+  /// TV side: whether the TV app should launch automatically when the TV
+  /// turns on (Android "start on boot"). Backed by native SharedPreferences
+  /// so a BroadcastReceiver can read it before any Dart code runs.
+  Future<bool> getLaunchOnBoot() async {
+    try {
+      final result = await _settingsChannel.invokeMethod<bool>('getLaunchOnBoot');
+      return result ?? false;
+    } on MissingPluginException {
+      // Not running on the tv flavor/Android build - treat as unsupported.
+      return false;
+    }
+  }
+
+  Future<void> setLaunchOnBoot(bool enabled) async {
+    try {
+      await _settingsChannel.invokeMethod('setLaunchOnBoot', {'enabled': enabled});
+    } on MissingPluginException {
+      // Not supported on this build - silently ignore.
+    }
+  }
+
+  /// TV side: tell the backend this TV was manually disconnected (via the
+  /// TV app's own "Disconnect" button), so the admin app shows it as
+  /// disconnected rather than connected. The pairing/code itself stays
+  /// valid.
+  Future<void> disconnectTv(String code) async {
+    final res = await http.post(_uri('/api/codes/$code/disconnect'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
   }
 
   Future<AdminLoginResult> adminLogin({
