@@ -51,6 +51,66 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
     if (saved == true) _refresh();
   }
 
+  Future<void> _quickAddTvs(TvGroup group, List<TvSummary> allTvs) async {
+    final available =
+        allTvs.where((t) => !group.tvCodes.contains(t.code)).toList();
+    if (available.isEmpty) return;
+    final selected = <String>{};
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text("Add TVs to '${group.name}'"),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final tv in available)
+                  CheckboxListTile(
+                    value: selected.contains(tv.code),
+                    title: Text(tv.nickname),
+                    subtitle: Text(tv.connected ? 'Connected' : 'Disconnected'),
+                    onChanged: (checked) => setDialogState(() {
+                      if (checked == true) {
+                        selected.add(tv.code);
+                      } else {
+                        selected.remove(tv.code);
+                      }
+                    }),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed:
+                  selected.isEmpty ? null : () => Navigator.pop(context, true),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || selected.isEmpty) return;
+    try {
+      await widget.pairingService.updateGroup(
+        group.id,
+        tvCodes: [...group.tvCodes, ...selected],
+      );
+      await _refresh();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to add TVs: $e')));
+      }
+    }
+  }
+
   Future<void> _deleteGroup(TvGroup group) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -186,6 +246,14 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add_circle_outline),
+                                tooltip: 'Add TVs',
+                                onPressed: data.tvs.length ==
+                                        group.tvCodes.length
+                                    ? null
+                                    : () => _quickAddTvs(group, data.tvs),
                               ),
                               IconButton(
                                 icon: const Icon(Icons.edit_outlined),
