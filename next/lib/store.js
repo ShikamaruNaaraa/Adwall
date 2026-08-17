@@ -39,6 +39,17 @@ globalThis.__adwallPairingCodes = codes;
 const serviceAds = globalThis.__adwallServiceAds ?? new Map();
 globalThis.__adwallServiceAds = serviceAds;
 
+// id -> { id, name, tvCodes: [code, ...] }
+//
+// A "group" is an ordered list of TV codes used for the group animation
+// feature: a snake/wave that travels left-to-right across tvCodes[0], then
+// continues into tvCodes[1], and so on, in the order the admin arranged
+// them. In-memory only (not persisted to MySQL) - groups are cheap to
+// recreate and don't need to survive a server restart. Stored on
+// globalThis for the same HMR reason as `codes`/`serviceAds` above.
+const groups = globalThis.__adwallGroups ?? new Map();
+globalThis.__adwallGroups = groups;
+
 async function hydrateFromDatabase() {
   const rows = await loadAllPairings();
   for (const row of rows) {
@@ -301,6 +312,104 @@ function mergeServiceAds(regularPlaylist, ads, code) {
 
 export function getEffectivePlaylist(entry) {
   return mergeServiceAds(entry.playlist, listServiceAds(), entry.code);
+}
+
+// --- TV groups & group animation ----------------------------------------
+//
+// A group is an ordered list of TV codes. "Playing" a group animation
+// broadcasts one extra SSE frame (shape { type: 'group_animation', ... },
+// see notifyAnimation below) to every currently-connected TV in the group,
+// all stamped with the same startAt timestamp. Each TV positions itself in
+// the shared timeline using its own index in the order + the total TV
+// count, so the snake appears to travel continuously from screen to
+// screen without any coordination beyond that shared start time.
+
+function generateGroupId() {
+  return `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createGroup(name, tvCodes) {
+  const group = {
+    id: generateGroupId(),
+    name,
+    tvCodes: Array.isArray(tvCodes) ? tvCodes.map(String) : [],
+  };
+  groups.set(group.id, group);
+  return group;
+}
+
+export function listGroups() {
+  return Array.from(groups.values());
+}
+
+export function getGroup(id) {
+  return groups.get(id) || null;
+}
+
+export function updateGroup(id, { name, tvCodes }) {
+  const group = groups.get(id);
+  if (!group) return null;
+  if (name !== undefined) group.name = name;
+  if (tvCodes !== undefined) {
+    group.tvCodes = Array.isArray(tvCodes) ? tvCodes.map(String) : [];
+  }
+  return group;
+}
+
+export function deleteGroup(id) {
+  return groups.delete(id);
+}
+
+// Broadcasts a one-off SSE frame that is NOT the regular playlist/status
+// state (see publicView/notify below) - the TV app tells the two apart by
+// checking for `type === 'group_animation'` before treating a frame as a
+// playlist/orientation update.
+function notifyAnimation(entry, payload) {
+  const frame = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const controller of entry.subscribers) {
+    try {
+      controller.enqueue(frame);
+    } catch {
+      entry.subscribers.delete(controller);
+    }
+  }
+}
+
+// Kicks off a group animation: every TV in the group's order gets sent its
+// index + the group size + a shared start timestamp (a few hundred ms in
+// the future, to give every device time to receive the frame before it
+// needs to start rendering). Returns summary info the admin UI can show.
+// Codes with no live connection are skipped (they can't render anything)
+// but still counted in `total` so remaining screens keep correct spacing.
+export function playGroupAnimation(
+  id,
+  { durationPerScreenMs = 1500, color = "#22C55E", startDelayMs = 600 } = {}
+) {
+  const group = groups.get(id);
+  if (!group) return null;
+  const startAt = Date.now() + Math.max(0, startDelayMs);
+  let sentTo = 0;
+  group.tvCodes.forEach((code, index) => {
+    const entry = codes.get(code);
+    if (!entry || entry.subscribers.size === 0) return;
+    notifyAnimation(entry, {
+      type: "group_animation",
+      groupId: group.id,
+      index,
+      total: group.tvCodes.length,
+      startAt,
+      durationPerScreenMs,
+      color,
+    });
+    sentTo += 1;
+  });
+  return {
+    groupId: group.id,
+    startAt,
+    total: group.tvCodes.length,
+    sentTo,
+    durationPerScreenMs,
+  };
 }
 
 // --- SSE plumbing -----------------------------------------------------

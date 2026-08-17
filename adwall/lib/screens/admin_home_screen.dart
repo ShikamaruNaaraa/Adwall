@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
 import 'admin_login_screen.dart';
+import 'group_animation_screen.dart';
 import 'service_ads_screen.dart';
 import 'tv_list_screen.dart';
 
@@ -166,7 +167,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Home', 'Add TV', 'Service Ads'];
+    const titles = ['Home', 'Add TV', 'Service Ads', 'Group Animation'];
     return Scaffold(
       appBar: AppBar(
         title: Text(titles[_selectedIndex]),
@@ -197,6 +198,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             embedded: true,
             onRefreshCallback: (refresh) => _serviceAdsRefresh = refresh,
           ),
+          GroupAnimationScreen(pairingService: _pairingService),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -213,6 +215,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             icon: Icon(Icons.campaign_outlined),
             selectedIcon: Icon(Icons.campaign),
             label: 'Service Ads',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.animation_outlined),
+            selectedIcon: Icon(Icons.animation),
+            label: 'Group Animation',
           ),
         ],
       ),
