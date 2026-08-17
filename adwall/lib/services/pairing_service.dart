@@ -538,33 +538,57 @@ class PairingService {
     }
   }
 
-  /// Admin side: starts the snake/wave group animation across every
-  /// connected TV in the group's order. [durationPerScreenSeconds] is how
-  /// long the snake takes to cross one screen before continuing onto the
-  /// next.
-  Future<void> playGroupAnimation(
-    String id, {
-    double durationPerScreenSeconds = 1.5,
-    String color = '#22C55E',
-    String text = '',
-    String textColor = '#FFFFFF',
-    double textFontSize = 48,
-    double textPositionY = 0.5,
-  }) async {
-    final res = await http.post(
-      _uri('/api/groups/$id/play'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'duration_per_screen_ms': (durationPerScreenSeconds * 1000).round(),
-        'color': color,
-        'text': text,
-        'text_color': textColor,
-        'text_font_size': textFontSize,
-        'text_position_y': textPositionY,
-      }),
-    );
+  /// Admin side: starts the group animation - sends the group's attached
+  /// media to the first connected TV in its order. Later TVs pick it up
+  /// one at a time as each prior one finishes playing (handled entirely by
+  /// the backend + TV apps; nothing further to call from here).
+  Future<void> playGroupAnimation(String id) async {
+    final res = await http.post(_uri('/api/groups/$id/play'));
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
+    }
+  }
+
+  /// Admin side: upload (or replace) the one media file - image or video -
+  /// that this group's animation hands off across its TVs, in order.
+  /// [durationSeconds] only matters for images; videos play to their own
+  /// natural end on the TV.
+  Future<TvGroup> uploadGroupAnimation(
+    String id, {
+    required String filePath,
+    required String fileName,
+    int? durationSeconds,
+  }) async {
+    final req = http.MultipartRequest('POST', _uri('/api/groups/$id/animation'));
+    if (durationSeconds != null) {
+      req.fields['duration_seconds'] = durationSeconds.toString();
+    }
+    req.files.add(await http.MultipartFile.fromPath(
+      'file',
+      filePath,
+      filename: fileName,
+    ));
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// TV side: reports that this TV finished playing the group animation at
+  /// [index] (its position in the group's order), so the backend can hand
+  /// off to the next TV in the list.
+  Future<void> reportGroupAnimationFinished(String groupId, int index) async {
+    try {
+      await http.post(
+        _uri('/api/groups/$groupId/advance'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'index': index}),
+      );
+    } catch (_) {
+      // Best-effort - if this fails the sequence just stops early, which
+      // is not worth surfacing an error for on the TV screen.
     }
   }
 
@@ -678,12 +702,20 @@ class ServiceAd {
   bool get appliesToAllTvs => targetTvCodes == null || targetTvCodes!.isEmpty;
 }
 
-/// An ordered set of TVs used for the Group Animation feature: a
-/// snake/wave that starts on `tvCodes[0]` and travels through the rest of
-/// the list in order, appearing to move continuously from one physical
-/// screen to the next.
+/// An ordered set of TVs used for the Group Animation feature: the admin
+/// attaches one media file (image or video) to the group, and playing it
+/// shows that media on `tvCodes[0]` first, then hands off to the next TV
+/// in the list the moment the previous one finishes, and so on down the
+/// order.
 class TvGroup {
-  const TvGroup({required this.id, required this.name, required this.tvCodes});
+  const TvGroup({
+    required this.id,
+    required this.name,
+    required this.tvCodes,
+    this.animationMediaUrl,
+    this.animationMediaType,
+    this.animationDurationSeconds = 8,
+  });
 
   factory TvGroup.fromJson(Map<String, dynamic> json) => TvGroup(
         id: json['id'] as String,
@@ -691,9 +723,26 @@ class TvGroup {
         tvCodes: (json['tvCodes'] as List<dynamic>? ?? [])
             .map((e) => e.toString())
             .toList(),
+        animationMediaUrl: json['animationMediaUrl'] as String?,
+        animationMediaType: json['animationMediaType'] as String?,
+        animationDurationSeconds:
+            (json['animationDurationSeconds'] as num?)?.toInt() ?? 8,
       );
 
   final String id;
   final String name;
   final List<String> tvCodes;
+
+  /// Relative media path (e.g. '/media/abc.mp4') for the group's animation,
+  /// or null if none has been added yet.
+  final String? animationMediaUrl;
+
+  /// 'image' or 'video'.
+  final String? animationMediaType;
+
+  /// Only used when [animationMediaType] is 'image' - videos play to their
+  /// own natural end instead.
+  final int animationDurationSeconds;
+
+  bool get hasAnimation => animationMediaUrl != null && animationMediaUrl!.isNotEmpty;
 }

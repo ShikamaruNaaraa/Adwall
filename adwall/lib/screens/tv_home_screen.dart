@@ -340,21 +340,24 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     Widget content = _playlist.isEmpty
         ? const Center(child: Text('No ads have been sent to this TV yet.'))
         : _PlaylistDisplay(playlist: _playlist);
-    // The snake needs to sweep left-to-right across what the viewer sees
-    // as this screen, so it rides along inside the same rotated frame as
-    // the ad content rather than sitting on top unrotated.
+    // The animation media needs to appear the way the viewer sees this
+    // screen, so it rides along inside the same rotated frame as the ad
+    // content rather than sitting on top unrotated.
     content = Stack(
       fit: StackFit.expand,
       children: [
         content,
         if (_animationCue != null)
           GroupAnimationOverlay(
-            key: ValueKey(
-              '${_animationCue!.groupId}-${_animationCue!.startAt}',
-            ),
+            key: ValueKey('${_animationCue!.groupId}-${_animationCue!.index}'),
             cue: _animationCue!,
+            resolvedMediaUrl:
+                _pairingService.resolveMediaUrl(_animationCue!.mediaUrl),
             onDone: () {
+              final cue = _animationCue;
+              if (cue == null) return;
               if (mounted) setState(() => _animationCue = null);
+              _pairingService.reportGroupAnimationFinished(cue.groupId, cue.index);
             },
           ),
       ],

@@ -39,14 +39,17 @@ globalThis.__adwallPairingCodes = codes;
 const serviceAds = globalThis.__adwallServiceAds ?? new Map();
 globalThis.__adwallServiceAds = serviceAds;
 
-// id -> { id, name, tvCodes: [code, ...] }
+// id -> { id, name, tvCodes: [code, ...], animationMediaUrl, animationMediaType,
+//         animationDurationSeconds, playback }
 //
 // A "group" is an ordered list of TV codes used for the group animation
-// feature: a snake/wave that travels left-to-right across tvCodes[0], then
-// continues into tvCodes[1], and so on, in the order the admin arranged
-// them. In-memory only (not persisted to MySQL) - groups are cheap to
-// recreate and don't need to survive a server restart. Stored on
-// globalThis for the same HMR reason as `codes`/`serviceAds` above.
+// feature: the admin attaches one media file (image or video) to the group,
+// and playing it shows that same media on tvCodes[0] first; the moment that
+// TV finishes playing it (reported back by the TV app), the next TV in the
+// order starts, and so on down the list. In-memory only (not persisted to
+// MySQL) - groups are cheap to recreate and don't need to survive a server
+// restart. Stored on globalThis for the same HMR reason as
+// `codes`/`serviceAds` above.
 const groups = globalThis.__adwallGroups ?? new Map();
 globalThis.__adwallGroups = groups;
 
@@ -341,13 +344,12 @@ export function getEffectivePlaylist(entry) {
 
 // --- TV groups & group animation ----------------------------------------
 //
-// A group is an ordered list of TV codes. "Playing" a group animation
-// broadcasts one extra SSE frame (shape { type: 'group_animation', ... },
-// see notifyAnimation below) to every currently-connected TV in the group,
-// all stamped with the same startAt timestamp. Each TV positions itself in
-// the shared timeline using its own index in the order + the total TV
-// count, so the snake appears to travel continuously from screen to
-// screen without any coordination beyond that shared start time.
+// A group is an ordered list of TV codes plus one attached media file
+// (image or video). "Playing" a group animation sends that media to the
+// first connected TV in the order only. When that TV finishes playing it
+// (reported back via advanceGroupAnimation), the next connected TV in the
+// order is sent the same media, and so on - so the animation genuinely
+// hands off screen to screen instead of running on a shared timer.
 
 function generateGroupId() {
   return `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -358,6 +360,10 @@ export function createGroup(name, tvCodes) {
     id: generateGroupId(),
     name,
     tvCodes: Array.isArray(tvCodes) ? tvCodes.map(String) : [],
+    animationMediaUrl: null,
+    animationMediaType: null, // 'image' | 'video'
+    animationDurationSeconds: 8, // only used for images; videos play to their own end
+    playback: null, // { index } while mid-sequence, else null
   };
   groups.set(group.id, group);
   return group;
@@ -381,6 +387,19 @@ export function updateGroup(id, { name, tvCodes }) {
   return group;
 }
 
+// Attaches (or replaces) the one media file that hands off across this
+// group's TVs in order. durationSeconds only matters for images - videos
+// signal their own end.
+export function setGroupAnimationMedia(id, { mediaUrl, mediaType, durationSeconds }) {
+  const group = groups.get(id);
+  if (!group) return null;
+  group.animationMediaUrl = mediaUrl;
+  group.animationMediaType = mediaType;
+  if (durationSeconds !== undefined) group.animationDurationSeconds = durationSeconds;
+  group.playback = null;
+  return group;
+}
+
 export function deleteGroup(id) {
   return groups.delete(id);
 }
@@ -400,53 +419,63 @@ function notifyAnimation(entry, payload) {
   }
 }
 
-// Kicks off a group animation: every TV in the group's order gets sent its
-// index + the group size + a shared start timestamp (a few hundred ms in
-// the future, to give every device time to receive the frame before it
-// needs to start rendering). Returns summary info the admin UI can show.
-// Codes with no live connection are skipped (they can't render anything)
-// but still counted in `total` so remaining screens keep correct spacing.
-export function playGroupAnimation(
-  id,
-  {
-    durationPerScreenMs = 1500,
-    color = "#22C55E",
-    startDelayMs = 600,
-    text = "",
-    textColor = "#FFFFFF",
-    textFontSize = 48,
-    textPositionY = 0.5,
-  } = {}
-) {
+// Sends the group's animation media to a single TV by its position in
+// tvCodes, and records that TV as the one currently playing it. Returns
+// false (without touching `playback`) if that TV has no live connection,
+// so the caller can move on to the next one.
+function sendToIndex(group, index) {
+  const code = group.tvCodes[index];
+  const entry = code ? codes.get(code) : null;
+  if (!entry || entry.subscribers.size === 0) return false;
+  notifyAnimation(entry, {
+    type: "group_animation",
+    groupId: group.id,
+    index,
+    total: group.tvCodes.length,
+    mediaUrl: group.animationMediaUrl,
+    mediaType: group.animationMediaType,
+    durationSeconds: group.animationDurationSeconds,
+  });
+  group.playback = { index };
+  return true;
+}
+
+// Starts the group animation hand-off at the first connected TV in the
+// order. Later TVs only pick it up once the prior one reports it finished
+// (see advanceGroupAnimation) - there is no shared timer or fixed offset.
+export function playGroupAnimation(id) {
   const group = groups.get(id);
   if (!group) return null;
-  const startAt = Date.now() + Math.max(0, startDelayMs);
-  let sentTo = 0;
-  group.tvCodes.forEach((code, index) => {
-    const entry = codes.get(code);
-    if (!entry || entry.subscribers.size === 0) return;
-    notifyAnimation(entry, {
-      type: "group_animation",
-      groupId: group.id,
-      index,
-      total: group.tvCodes.length,
-      startAt,
-      durationPerScreenMs,
-      color,
-      text,
-      textColor,
-      textFontSize,
-      textPositionY,
-    });
-    sentTo += 1;
-  });
-  return {
-    groupId: group.id,
-    startAt,
-    total: group.tvCodes.length,
-    sentTo,
-    durationPerScreenMs,
-  };
+  if (!group.animationMediaUrl) {
+    return { error: "no_media" };
+  }
+  group.playback = null;
+  for (let i = 0; i < group.tvCodes.length; i++) {
+    if (sendToIndex(group, i)) {
+      return { groupId: group.id, total: group.tvCodes.length, startedAtIndex: i };
+    }
+  }
+  return { groupId: group.id, total: group.tvCodes.length, startedAtIndex: null };
+}
+
+// Called by a TV once its copy of the group animation finishes playing.
+// Moves playback on to the next connected TV in the order, or clears it if
+// this was the last one. `fromIndex` is the index the reporting TV believes
+// it was playing at; mismatches (stale/duplicate reports, or a report that
+// arrives after the admin restarted the sequence) are ignored.
+export function advanceGroupAnimation(id, fromIndex) {
+  const group = groups.get(id);
+  if (!group) return null;
+  if (!group.playback || group.playback.index !== fromIndex) {
+    return { ignored: true };
+  }
+  for (let i = fromIndex + 1; i < group.tvCodes.length; i++) {
+    if (sendToIndex(group, i)) {
+      return { groupId: group.id, index: i, done: false };
+    }
+  }
+  group.playback = null;
+  return { groupId: group.id, done: true };
 }
 
 // --- SSE plumbing -----------------------------------------------------

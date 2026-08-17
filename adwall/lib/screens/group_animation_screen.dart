@@ -1,11 +1,13 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
 
 /// Admin "Group Animation" section: pick a set of TVs, arrange the order
-/// they should light up in, then play a snake/wave that travels left to
-/// right across the first TV and continues seamlessly onto the next TV in
-/// that order, and so on - as if one animation were sweeping across all
-/// the physical screens lined up together.
+/// they should light up in, attach one animation (an image or video the
+/// admin uploads), then Play to show it on the first TV. The moment that
+/// TV finishes playing it, it hands off to the next TV in the order, and
+/// so on down the list - so only one screen is ever playing the animation
+/// at a time.
 class GroupAnimationScreen extends StatefulWidget {
   const GroupAnimationScreen({super.key, required this.pairingService});
 
@@ -18,41 +20,8 @@ class GroupAnimationScreen extends StatefulWidget {
 class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
   late Future<_ScreenData> _future;
   String? _playingGroupId;
+  String? _uploadingGroupId;
   String? _error;
-  final Map<String, TextEditingController> _textControllers = {};
-  final Map<String, Color> _textColors = {};
-  final Map<String, double> _textSizes = {};
-  final Map<String, double> _textPositions = {};
-
-  static const List<Color> _textColorChoices = [
-    Colors.white,
-    Colors.black,
-    Colors.red,
-    Colors.amber,
-    Colors.lightGreenAccent,
-    Colors.cyanAccent,
-  ];
-
-  TextEditingController _textControllerFor(String groupId) =>
-      _textControllers.putIfAbsent(groupId, () => TextEditingController());
-
-  Color _textColorFor(String groupId) =>
-      _textColors[groupId] ?? Colors.white;
-
-  double _textSizeFor(String groupId) => _textSizes[groupId] ?? 48;
-
-  double _textPositionFor(String groupId) => _textPositions[groupId] ?? 0.5;
-
-  String _hexOf(Color color) =>
-      '#${color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}';
-
-  @override
-  void dispose() {
-    for (final controller in _textControllers.values) {
-      controller.dispose();
-    }
-    super.dispose();
-  }
 
   @override
   void initState() {
@@ -175,20 +144,89 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
     }
   }
 
+  /// Lets the admin pick an image or video from this device and upload it
+  /// as the group's animation. Videos play to their own end on the TV;
+  /// for images, ask for how many seconds to show it.
+  Future<void> _addAnimation(TvGroup group) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'mov', 'webm', 'mkv'],
+    );
+    if (result.isEmpty || result.first.path == null) return;
+    final file = result.first;
+    final isVideo = ['.mp4', '.mov', '.webm', '.mkv']
+        .any((ext) => file.name.toLowerCase().endsWith(ext));
+
+    int? durationSeconds;
+    if (!isVideo) {
+      durationSeconds = await showDialog<int>(
+        context: context,
+        builder: (context) {
+          final controller = TextEditingController(
+            text: (group.animationDurationSeconds).toString(),
+          );
+          return AlertDialog(
+            title: const Text('How long should it show?'),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Duration (seconds)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final value = int.tryParse(controller.text);
+                  Navigator.pop(context, (value == null || value < 1) ? 8 : value);
+                },
+                child: const Text('Continue'),
+              ),
+            ],
+          );
+        },
+      );
+      if (durationSeconds == null) return;
+    }
+
+    setState(() {
+      _uploadingGroupId = group.id;
+      _error = null;
+    });
+    try {
+      await widget.pairingService.uploadGroupAnimation(
+        group.id,
+        filePath: file.path!,
+        fileName: file.name,
+        durationSeconds: durationSeconds,
+      );
+      await _refresh();
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Failed to add animation: $e');
+    } finally {
+      if (mounted) setState(() => _uploadingGroupId = null);
+    }
+  }
+
   Future<void> _playGroup(TvGroup group) async {
+    if (!group.hasAnimation) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add an animation to this group first.')),
+      );
+      return;
+    }
     setState(() {
       _playingGroupId = group.id;
       _error = null;
     });
     try {
-      final text = _textControllerFor(group.id).text.trim();
-      await widget.pairingService.playGroupAnimation(
-        group.id,
-        text: text,
-        textColor: _hexOf(_textColorFor(group.id)),
-        textFontSize: _textSizeFor(group.id),
-        textPositionY: _textPositionFor(group.id),
-      );
+      await widget.pairingService.playGroupAnimation(group.id);
     } catch (e) {
       setState(() => _error = 'Failed to play animation: $e');
     } finally {
@@ -232,9 +270,10 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          'Arrange TVs in order, then Play to send a snake '
-                          'animation sweeping left-to-right across them, '
-                          'screen by screen, in that order.',
+                          'Arrange TVs in order, add an animation (image or '
+                          'video), then Play. It shows on the first TV, and '
+                          'the moment that TV finishes, the next TV in the '
+                          'order starts - one screen at a time, in sequence.',
                         ),
                       ),
                     ],
@@ -270,6 +309,7 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                 ...data.groups.map((group) {
                   final byCode = {for (final t in data.tvs) t.code: t};
                   final playing = _playingGroupId == group.id;
+                  final uploading = _uploadingGroupId == group.id;
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
                     child: Padding(
@@ -328,90 +368,49 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                             ],
                           ),
                           const SizedBox(height: 12),
-                          TextField(
-                            controller: _textControllerFor(group.id),
-                            decoration: const InputDecoration(
-                              labelText: 'Scrolling text (optional)',
-                              hintText: 'e.g. Welcome to the lobby',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
                           Row(
                             children: [
-                              const Text('Color:'),
-                              const SizedBox(width: 8),
-                              for (final choice in _textColorChoices)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 6),
-                                  child: GestureDetector(
-                                    onTap: () => setState(
-                                      () => _textColors[group.id] = choice,
-                                    ),
-                                    child: CircleAvatar(
-                                      radius: 12,
-                                      backgroundColor: choice,
-                                      child: _textColorFor(group.id) == choice
-                                          ? Icon(
-                                              Icons.check,
-                                              size: 14,
-                                              color: choice.computeLuminance() >
-                                                      0.5
-                                                  ? Colors.black
-                                                  : Colors.white,
-                                            )
-                                          : null,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          Row(
-                            children: [
-                              const SizedBox(
-                                width: 40,
-                                child: Text('Size:'),
+                              Icon(
+                                group.hasAnimation
+                                    ? (group.animationMediaType == 'video'
+                                        ? Icons.movie_outlined
+                                        : Icons.image_outlined)
+                                    : Icons.image_not_supported_outlined,
+                                size: 18,
+                                color: group.hasAnimation ? null : Colors.grey,
                               ),
+                              const SizedBox(width: 6),
                               Expanded(
-                                child: Slider(
-                                  value: _textSizeFor(group.id),
-                                  min: 16,
-                                  max: 120,
-                                  divisions: 26,
-                                  label: _textSizeFor(group.id).round().toString(),
-                                  onChanged: (value) => setState(
-                                    () => _textSizes[group.id] = value,
+                                child: Text(
+                                  group.hasAnimation
+                                      ? '${group.animationMediaType == 'video' ? 'Video' : 'Image'} animation added'
+                                      : 'No animation added yet',
+                                  style: TextStyle(
+                                    color: group.hasAnimation
+                                        ? null
+                                        : Colors.grey,
                                   ),
+                                ),
+                              ),
+                              TextButton.icon(
+                                onPressed:
+                                    uploading ? null : () => _addAnimation(group),
+                                icon: uploading
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.upload_outlined, size: 18),
+                                label: Text(
+                                  group.hasAnimation ? 'Replace' : 'Add animation',
                                 ),
                               ),
                             ],
                           ),
-                          Row(
-                            children: [
-                              const SizedBox(
-                                width: 40,
-                                child: Text('Pos:'),
-                              ),
-                              Expanded(
-                                child: Slider(
-                                  value: _textPositionFor(group.id),
-                                  min: 0,
-                                  max: 1,
-                                  divisions: 20,
-                                  label: _textPositionFor(group.id) < 0.34
-                                      ? 'Top'
-                                      : _textPositionFor(group.id) < 0.67
-                                          ? 'Middle'
-                                          : 'Bottom',
-                                  onChanged: (value) => setState(
-                                    () => _textPositions[group.id] = value,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 4),
                           Align(
                             alignment: Alignment.centerRight,
                             child: FilledButton.icon(
