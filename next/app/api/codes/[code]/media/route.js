@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
-import { getEntry, setPlaylist } from "../../../../../lib/store";
+import { getEntry, setPlaylist, ensureHydrated } from "../../../../../lib/store";
 const MEDIA_DIR = path.join(process.cwd(), "media_files");
 
 function mediaTypeFor(fileName) {
@@ -11,6 +11,7 @@ function mediaTypeFor(fileName) {
 }
 
 export async function POST(request, { params }) {
+  await ensureHydrated();
   const { code } = await params;
 
   const entry = getEntry(code);

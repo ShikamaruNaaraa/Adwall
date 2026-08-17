@@ -1,9 +1,10 @@
-import { getEntry, subscribe, unsubscribe } from "../../../../../lib/store";
+import { getEntry, subscribe, unsubscribe, ensureHydrated } from "../../../../../lib/store";
 
 // Server-Sent Events: lighter than WebSocket for this one-way
 // server->client "waiting / paired" push, and works as a plain Next.js
 // route handler with no custom server required.
 export async function GET(request, { params }) {
+  await ensureHydrated();
   const { code } = await params;
 
   if (!getEntry(code)) {

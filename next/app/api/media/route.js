@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
-import { getEntry, setPlaylist } from "../../../lib/store";
+import { getEntry, setPlaylist, ensureHydrated } from "../../../lib/store";
 
 const MEDIA_DIR = path.join(process.cwd(), "media_files");
 
@@ -16,6 +16,7 @@ function mediaTypeFor(fileName) {
 // it once per TV.
 // multipart/form-data: file, duration_seconds, codes (JSON array of TV codes)
 export async function POST(request) {
+  await ensureHydrated();
   const form = await request.formData();
   const file = form.get("file");
   const durationSeconds = Number(form.get("duration_seconds") ?? 10);

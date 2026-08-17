@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
+import 'admin_login_screen.dart';
 import 'service_ads_screen.dart';
 import 'tv_list_screen.dart';
+
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
 
@@ -18,11 +22,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   bool _generating = false;
   String? _error;
   int _selectedIndex = 0;
+  VoidCallback? _serviceAdsRefresh;
+
+  final _pageController = PageController();
 
   @override
   void initState() {
     super.initState();
     _tvsFuture = _pairingService.fetchTvs();
+  }
+
+  @override
+  void dispose() {
+    _nicknameController.dispose();
+    _pageController.dispose();
+    super.dispose();
   }
 
   Future<void> _refreshTvs() async {
@@ -56,13 +70,22 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
-  Future<void> _openAddTv() async {
-    _nicknameController.clear();
-    setState(() {
-      _selectedIndex = 1;
-      _error = null;
-      _activeCode = null;
-    });
+  void _goToPage(int index) {
+    setState(() => _selectedIndex = index);
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+    );
+    if (index == 1) {
+      _nicknameController.clear();
+      setState(() {
+        _error = null;
+        _activeCode = null;
+      });
+    } else if (index == 0) {
+      _refreshTvs();
+    }
   }
 
   void _openTv(TvSummary tv) {
@@ -76,37 +99,109 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         .then((_) => _refreshTvs());
   }
 
-  void _openServiceAds() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ServiceAdsScreen(pairingService: _pairingService),
+  Future<bool> _confirmDeleteTv(TvSummary tv) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove TV?'),
+        content: Text(
+          "This unpairs '${tv.nickname}' and clears its ad playlist. "
+          'The TV will need a new code to reconnect.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
       ),
+    );
+    return confirmed ?? false;
+  }
+
+  Future<void> _deleteTv(TvSummary tv) async {
+    try {
+      await _pairingService.deleteTv(tv.code);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to remove TV: $e')),
+        );
+      }
+    } finally {
+      await _refreshTvs();
+    }
+  }
+
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _pairingService.clearLoggedInAdmin();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AdminLoginScreen()),
+      (route) => false,
     );
   }
 
-  @override
-  void dispose() {
-    _nicknameController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
+    const titles = ['Home', 'Add TV', 'Service Ads'];
     return Scaffold(
-      appBar: AppBar(title: Text(_selectedIndex == 0 ? 'Home' : 'Add TV')),
-      body: _selectedIndex == 0 ? _buildHome() : _buildAddTv(),
+      appBar: AppBar(
+        title: Text(titles[_selectedIndex]),
+        actions: [
+          if (_selectedIndex == 2)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _serviceAdsRefresh,
+            ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Log out',
+            onPressed: _logout,
+          ),
+        ],
+      ),
+      body: PageView(
+        controller: _pageController,
+        onPageChanged: (index) {
+          setState(() => _selectedIndex = index);
+          if (index == 0) _refreshTvs();
+        },
+        children: [
+          _buildHome(),
+          _buildAddTv(),
+          ServiceAdsScreen(
+            pairingService: _pairingService,
+            embedded: true,
+            onRefreshCallback: (refresh) => _serviceAdsRefresh = refresh,
+          ),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          if (index == 1) {
-            _openAddTv();
-          } else if (index == 2) {
-            _openServiceAds();
-          } else {
-            setState(() => _selectedIndex = 0);
-            _refreshTvs();
-          }
-        },
+        onDestinationSelected: _goToPage,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -161,29 +256,51 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
               final tv = tvs[index];
-              return Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: tv.connected
-                        ? Colors.green.withValues(alpha: 0.15)
-                        : Colors.red.withValues(alpha: 0.15),
-                    child: Icon(
-                      tv.connected ? Icons.tv : Icons.tv_off,
-                      color: tv.connected ? Colors.green : Colors.red,
+              return Dismissible(
+                key: ValueKey(tv.code),
+                direction: DismissDirection.endToStart,
+                confirmDismiss: (_) => _confirmDeleteTv(tv),
+                onDismissed: (_) => _deleteTv(tv),
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade600,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.delete, color: Colors.white),
+                ),
+                child: Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: tv.connected
+                          ? Colors.green.withValues(alpha: 0.15)
+                          : Colors.red.withValues(alpha: 0.15),
+                      child: Icon(
+                        tv.connected ? Icons.tv : Icons.tv_off,
+                        color: tv.connected ? Colors.green : Colors.red,
+                      ),
+                    ),
+                    title: Text(tv.nickname),
+                    subtitle: Text(
+                      tv.connected
+                          ? (tv.playlist.isEmpty
+                              ? 'Connected · No ads set'
+                              : 'Connected · ${tv.playlist.length} ad(s)')
+                          : 'Disconnected · reconnect with code ${tv.code}',
+                      style: tv.connected
+                          ? null
+                          : TextStyle(color: Colors.red.shade700),
+                    ),
+                    onTap: () => _openTv(tv),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: 'Remove TV',
+                      onPressed: () async {
+                        if (await _confirmDeleteTv(tv)) _deleteTv(tv);
+                      },
                     ),
                   ),
-                  title: Text(tv.nickname),
-                  subtitle: Text(
-                    tv.connected
-                        ? (tv.playlist.isEmpty
-                            ? 'Connected · No ads set'
-                            : 'Connected · ${tv.playlist.length} ad(s)')
-                        : 'Disconnected · reconnect with code ${tv.code}',
-                    style: tv.connected
-                        ? null
-                        : TextStyle(color: Colors.red.shade700),
-                  ),
-                  onTap: () => _openTv(tv),
                 ),
               );
             },

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'flavors.dart';
-import 'screens/admin_home_screen.dart';
+import 'screens/admin_login_screen.dart';
 import 'screens/tv_home_screen.dart';
 
 class AdWallApp extends StatelessWidget {
@@ -13,7 +13,7 @@ class AdWallApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
       home: F.appFlavor == Flavor.admin
-          ? const AdminHomeScreen()
+          ? const AdminLoginScreen()
           : const TvHomeScreen(),
     );
   }
