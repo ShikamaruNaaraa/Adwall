@@ -19,6 +19,40 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
   late Future<_ScreenData> _future;
   String? _playingGroupId;
   String? _error;
+  final Map<String, TextEditingController> _textControllers = {};
+  final Map<String, Color> _textColors = {};
+  final Map<String, double> _textSizes = {};
+  final Map<String, double> _textPositions = {};
+
+  static const List<Color> _textColorChoices = [
+    Colors.white,
+    Colors.black,
+    Colors.red,
+    Colors.amber,
+    Colors.lightGreenAccent,
+    Colors.cyanAccent,
+  ];
+
+  TextEditingController _textControllerFor(String groupId) =>
+      _textControllers.putIfAbsent(groupId, () => TextEditingController());
+
+  Color _textColorFor(String groupId) =>
+      _textColors[groupId] ?? Colors.white;
+
+  double _textSizeFor(String groupId) => _textSizes[groupId] ?? 48;
+
+  double _textPositionFor(String groupId) => _textPositions[groupId] ?? 0.5;
+
+  String _hexOf(Color color) =>
+      '#${color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}';
+
+  @override
+  void dispose() {
+    for (final controller in _textControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -147,7 +181,14 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
       _error = null;
     });
     try {
-      await widget.pairingService.playGroupAnimation(group.id);
+      final text = _textControllerFor(group.id).text.trim();
+      await widget.pairingService.playGroupAnimation(
+        group.id,
+        text: text,
+        textColor: _hexOf(_textColorFor(group.id)),
+        textFontSize: _textSizeFor(group.id),
+        textPositionY: _textPositionFor(group.id),
+      );
     } catch (e) {
       setState(() => _error = 'Failed to play animation: $e');
     } finally {
@@ -284,6 +325,90 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                                       byCode[group.tvCodes[i]]?.connected ??
                                           false,
                                 ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _textControllerFor(group.id),
+                            decoration: const InputDecoration(
+                              labelText: 'Scrolling text (optional)',
+                              hintText: 'e.g. Welcome to the lobby',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              const Text('Color:'),
+                              const SizedBox(width: 8),
+                              for (final choice in _textColorChoices)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: GestureDetector(
+                                    onTap: () => setState(
+                                      () => _textColors[group.id] = choice,
+                                    ),
+                                    child: CircleAvatar(
+                                      radius: 12,
+                                      backgroundColor: choice,
+                                      child: _textColorFor(group.id) == choice
+                                          ? Icon(
+                                              Icons.check,
+                                              size: 14,
+                                              color: choice.computeLuminance() >
+                                                      0.5
+                                                  ? Colors.black
+                                                  : Colors.white,
+                                            )
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              const SizedBox(
+                                width: 40,
+                                child: Text('Size:'),
+                              ),
+                              Expanded(
+                                child: Slider(
+                                  value: _textSizeFor(group.id),
+                                  min: 16,
+                                  max: 120,
+                                  divisions: 26,
+                                  label: _textSizeFor(group.id).round().toString(),
+                                  onChanged: (value) => setState(
+                                    () => _textSizes[group.id] = value,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              const SizedBox(
+                                width: 40,
+                                child: Text('Pos:'),
+                              ),
+                              Expanded(
+                                child: Slider(
+                                  value: _textPositionFor(group.id),
+                                  min: 0,
+                                  max: 1,
+                                  divisions: 20,
+                                  label: _textPositionFor(group.id) < 0.34
+                                      ? 'Top'
+                                      : _textPositionFor(group.id) < 0.67
+                                          ? 'Middle'
+                                          : 'Bottom',
+                                  onChanged: (value) => setState(
+                                    () => _textPositions[group.id] = value,
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 12),

@@ -546,6 +546,10 @@ class PairingService {
     String id, {
     double durationPerScreenSeconds = 1.5,
     String color = '#22C55E',
+    String text = '',
+    String textColor = '#FFFFFF',
+    double textFontSize = 48,
+    double textPositionY = 0.5,
   }) async {
     final res = await http.post(
       _uri('/api/groups/$id/play'),
@@ -553,6 +557,10 @@ class PairingService {
       body: jsonEncode({
         'duration_per_screen_ms': (durationPerScreenSeconds * 1000).round(),
         'color': color,
+        'text': text,
+        'text_color': textColor,
+        'text_font_size': textFontSize,
+        'text_position_y': textPositionY,
       }),
     );
     if (res.statusCode != 200) {
