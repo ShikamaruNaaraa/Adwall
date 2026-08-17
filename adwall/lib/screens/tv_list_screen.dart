@@ -138,6 +138,10 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     );
     if (result.isEmpty) return;
 
+    if (!mounted) return;
+    final targetCodes = await _pickTargetTvs();
+    if (targetCodes == null || targetCodes.isEmpty) return;
+
     setState(() {
       _uploading = true;
       _error = null;
@@ -145,17 +149,24 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     try {
       for (final file in result) {
         if (file.path == null) continue;
-        final updated = await widget.pairingService.uploadMedia(
-          widget.tv.code,
+        final results = await widget.pairingService.uploadMediaToTvs(
+          codes: targetCodes,
           filePath: file.path!,
           fileName: file.name,
           durationSeconds: _defaultDuration,
         );
-        if (mounted) setState(() => _playlist = updated);
+        final ownPlaylist = results[widget.tv.code];
+        if (mounted && ownPlaylist != null) {
+          setState(() => _playlist = ownPlaylist);
+        }
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${result.length} item(s) added to "${widget.tv.nickname}"')),
+          SnackBar(
+            content: Text(
+              '${result.length} item(s) added to ${targetCodes.length} TV(s)',
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -163,6 +174,63 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
+  }
+
+  /// Lets the admin choose which TVs should receive the ad(s) about to be
+  /// uploaded, so the same ad can be pushed to multiple TVs at once. The
+  /// current TV is preselected.
+  Future<List<String>?> _pickTargetTvs() async {
+    List<TvSummary> tvs;
+    try {
+      tvs = await widget.pairingService.fetchTvs();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+      return null;
+    }
+    if (!mounted) return null;
+
+    final selected = <String>{widget.tv.code};
+    return showDialog<List<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Send to which TVs?'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: tvs.map((tv) {
+                return CheckboxListTile(
+                  value: selected.contains(tv.code),
+                  title: Text(tv.nickname),
+                  onChanged: (checked) {
+                    setDialogState(() {
+                      if (checked ?? false) {
+                        selected.add(tv.code);
+                      } else {
+                        selected.remove(tv.code);
+                      }
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: selected.isEmpty
+                  ? null
+                  : () => Navigator.pop(context, selected.toList()),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _setDurationForAll() async {
@@ -197,6 +265,46 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     );
   }
 
+  Future<void> _editItemDuration(int index) async {
+    final item = _playlist[index];
+    final controller = TextEditingController(text: item.durationSeconds.toString());
+    final value = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit duration'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Seconds'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final seconds = int.tryParse(controller.text);
+              if (seconds != null && seconds >= 1) Navigator.pop(context, seconds);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (value == null || !mounted) return;
+
+    try {
+      final updated = await widget.pairingService.updatePlaylistItemDuration(
+        widget.tv.code,
+        index: index,
+        durationSeconds: value,
+      );
+      if (mounted) setState(() => _playlist = updated);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -229,11 +337,21 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
                             leading: const Icon(Icons.image),
                             title: Text(item.mediaUrl.split('/').last),
                             subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.remove_circle_outline),
-                              onPressed: () {
-                                setState(() => _playlist.removeAt(index));
-                              },
+                            onTap: () => _editItemDuration(index),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () => _editItemDuration(index),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.remove_circle_outline),
+                                  onPressed: () {
+                                    setState(() => _playlist.removeAt(index));
+                                  },
+                                ),
+                              ],
                             ),
                           ),
                         );

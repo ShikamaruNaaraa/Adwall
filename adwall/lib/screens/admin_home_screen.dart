@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
+import 'service_ads_screen.dart';
 import 'tv_list_screen.dart';
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -75,6 +76,14 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         .then((_) => _refreshTvs());
   }
 
+  void _openServiceAds() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ServiceAdsScreen(pairingService: _pairingService),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _nicknameController.dispose();
@@ -91,6 +100,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         onDestinationSelected: (index) {
           if (index == 1) {
             _openAddTv();
+          } else if (index == 2) {
+            _openServiceAds();
           } else {
             setState(() => _selectedIndex = 0);
             _refreshTvs();
@@ -103,6 +114,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             label: 'Home',
           ),
           NavigationDestination(icon: Icon(Icons.add), label: 'Add TV'),
+          NavigationDestination(
+            icon: Icon(Icons.campaign_outlined),
+            selectedIcon: Icon(Icons.campaign),
+            label: 'Service Ads',
+          ),
         ],
       ),
     );
@@ -147,13 +163,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               final tv = tvs[index];
               return Card(
                 child: ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.tv)),
+                  leading: CircleAvatar(
+                    backgroundColor: tv.connected
+                        ? Colors.green.withValues(alpha: 0.15)
+                        : Colors.red.withValues(alpha: 0.15),
+                    child: Icon(
+                      tv.connected ? Icons.tv : Icons.tv_off,
+                      color: tv.connected ? Colors.green : Colors.red,
+                    ),
+                  ),
                   title: Text(tv.nickname),
-                   subtitle: Text(
-                     tv.playlist.isEmpty
-                         ? 'Connected · No ads set'
-                         : 'Connected · ${tv.playlist.length} ad(s)',
-                   ),
+                  subtitle: Text(
+                    tv.connected
+                        ? (tv.playlist.isEmpty
+                            ? 'Connected · No ads set'
+                            : 'Connected · ${tv.playlist.length} ad(s)')
+                        : 'Disconnected · reconnect with code ${tv.code}',
+                    style: tv.connected
+                        ? null
+                        : TextStyle(color: Colors.red.shade700),
+                  ),
                   onTap: () => _openTv(tv),
                 ),
               );

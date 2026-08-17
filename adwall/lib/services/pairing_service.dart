@@ -90,6 +90,7 @@ class PairingService {
   Stream<Map<String, dynamic>> watchPairing(String code) {
     final controller = StreamController<Map<String, dynamic>>();
     final client = http.Client();
+    controller.onCancel = client.close;
 
     () async {
       try {
@@ -191,6 +192,133 @@ class PairingService {
         .toList();
   }
 
+  /// Admin side: upload one ad and attach it to every TV in [codes], so the
+  /// same file can be shown on multiple TVs without re-uploading it.
+  /// Returns the code the ad was uploaded for -> that TV's updated playlist.
+  Future<Map<String, List<PlaylistItem>>> uploadMediaToTvs({
+    required List<String> codes,
+    required String filePath,
+    required String fileName,
+    required int durationSeconds,
+  }) async {
+    final req = http.MultipartRequest('POST', _uri('/api/media'));
+    req.fields['duration_seconds'] = durationSeconds.toString();
+    req.fields['codes'] = jsonEncode(codes);
+    req.files.add(await http.MultipartFile.fromPath(
+      'file',
+      filePath,
+      filename: fileName,
+    ));
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final results = body['results'] as Map<String, dynamic>;
+    return results.map((code, playlist) => MapEntry(
+          code,
+          (playlist as List<dynamic>)
+              .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+              .toList(),
+        ));
+  }
+
+  /// Admin side: every service ad (admin-wide ad + duration + play
+  /// interval), inserted automatically into every TV's ad sequence.
+  Future<List<ServiceAd>> fetchServiceAds() async {
+    final res = await http.get(_uri('/api/service-ads'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list
+        .map((e) => ServiceAd.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ServiceAd> createServiceAd({
+    required String filePath,
+    required String fileName,
+    required int durationSeconds,
+    required int interval,
+    List<String>? targetTvCodes,
+  }) async {
+    final req = http.MultipartRequest('POST', _uri('/api/service-ads'));
+    req.fields['duration_seconds'] = durationSeconds.toString();
+    req.fields['interval'] = interval.toString();
+    if (targetTvCodes != null && targetTvCodes.isNotEmpty) {
+      req.fields['target_tv_codes'] = jsonEncode(targetTvCodes);
+    }
+    req.files.add(await http.MultipartFile.fromPath(
+      'file',
+      filePath,
+      filename: fileName,
+    ));
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    return ServiceAd.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<void> deleteServiceAd(String id) async {
+    final res = await http.delete(_uri('/api/service-ads/$id'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+  }
+
+  /// Admin side: edit an existing service ad's duration and/or play
+  /// interval (occurrence count) without re-uploading the image.
+  Future<ServiceAd> updateServiceAd(
+    String id, {
+    int? durationSeconds,
+    int? interval,
+    bool updateTargetTvCodes = false,
+    List<String>? targetTvCodes,
+  }) async {
+    final body = <String, dynamic>{};
+    if (durationSeconds != null) body['duration_seconds'] = durationSeconds;
+    if (interval != null) body['interval'] = interval;
+    if (updateTargetTvCodes) {
+      body['target_tv_codes'] =
+          (targetTvCodes == null || targetTvCodes.isEmpty)
+              ? null
+              : targetTvCodes;
+    }
+    final res = await http.patch(
+      _uri('/api/service-ads/$id'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    return ServiceAd.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Admin side: edit the duration of one ad already on a TV's playlist
+  /// (identified by its position) without re-uploading it.
+  Future<List<PlaylistItem>> updatePlaylistItemDuration(
+    String code, {
+    required int index,
+    required int durationSeconds,
+  }) async {
+    final res = await http.patch(
+      _uri('/api/codes/$code/playlist'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'index': index, 'duration_seconds': durationSeconds}),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['playlist'] as List<dynamic>)
+        .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
 
   String _errorMessage(http.Response res) {
     try {
@@ -228,6 +356,7 @@ class TvSummary {
     required this.code,
     required this.nickname,
     required this.playlist,
+    required this.connected,
   });
 
   factory TvSummary.fromJson(Map<String, dynamic> json) => TvSummary(
@@ -236,11 +365,15 @@ class TvSummary {
         playlist: (json['playlist'] as List<dynamic>? ?? [])
             .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
             .toList(),
+        // Whether the TV currently has a live connection to the backend.
+        // Defaults to true for older backends that don't send this field.
+        connected: json['connected'] as bool? ?? true,
       );
 
   final String code;
   final String nickname;
   final List<PlaylistItem> playlist;
+  final bool connected;
 }
 
 class PairedTv {
@@ -248,4 +381,43 @@ class PairedTv {
 
   final String code;
   final String nickname;
+}
+
+/// An admin-wide ad that automatically plays on every registered TV, after
+/// every [interval] regular ads that TV shows (clamped down to that TV's
+/// own ad count, so a TV with only 1 ad still gets it after that 1 ad).
+class ServiceAd {
+  const ServiceAd({
+    required this.id,
+    required this.mediaType,
+    required this.mediaUrl,
+    required this.durationSeconds,
+    required this.interval,
+    this.targetTvCodes,
+  });
+
+  factory ServiceAd.fromJson(Map<String, dynamic> json) => ServiceAd(
+        id: json['id'] as String,
+        mediaType: json['mediaType'] as String? ??
+            json['media_type'] as String? ?? 'image',
+        mediaUrl: json['mediaUrl'] as String? ?? json['media_url'] as String,
+        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ??
+            (json['duration_seconds'] as num?)?.toInt() ?? 10,
+        interval: (json['interval'] as num?)?.toInt() ?? 1,
+        targetTvCodes: ((json['targetTvCodes'] ?? json['target_tv_codes'])
+                as List<dynamic>?)
+            ?.map((e) => e.toString())
+            .toList(),
+      );
+
+  final String id;
+  final String mediaType;
+  final String mediaUrl;
+  final int durationSeconds;
+  final int interval;
+
+  /// TV codes this ad is restricted to. `null` means it plays on every TV.
+  final List<String>? targetTvCodes;
+
+  bool get appliesToAllTvs => targetTvCodes == null || targetTvCodes!.isEmpty;
 }

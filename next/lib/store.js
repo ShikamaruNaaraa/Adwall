@@ -28,12 +28,25 @@ if (!process.env.DATABASE_URL) {
 const codes = globalThis.__adwallPairingCodes ?? new Map();
 globalThis.__adwallPairingCodes = codes;
 
+// id -> { id, mediaUrl, mediaType, durationSeconds, interval }
+//
+// Service ads are admin-wide (not tied to one TV): every registered/paired
+// TV plays them automatically, inserted into its own ad sequence after
+// every `interval` regular ads. Stored on globalThis for the same HMR
+// reason as `codes` above.
+const serviceAds = globalThis.__adwallServiceAds ?? new Map();
+globalThis.__adwallServiceAds = serviceAds;
+
 function generateCode() {
   let code;
   do {
     code = String(Math.floor(100000 + Math.random() * 900000));
   } while (codes.has(code));
   return code;
+}
+
+function generateServiceAdId() {
+  return `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function createPairingCode(nickname) {
@@ -78,6 +91,20 @@ export function setPlaylist(code, playlist) {
   return entry;
 }
 
+// Edits a single ad already on a TV's playlist (by its position) - used to
+// change how long that ad plays for without re-uploading it.
+export function updatePlaylistItem(code, index, { durationSeconds }) {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  const item = entry.playlist[index];
+  if (!item) return null;
+  if (durationSeconds !== undefined) {
+    item.durationSeconds = Math.max(1, Number(durationSeconds) || 1);
+  }
+  notify(entry);
+  return entry.playlist;
+}
+
 export function clearPlaylist(code) {
   return setPlaylist(code, []);
 }
@@ -91,13 +118,112 @@ export function listPairedTvs() {
   return Array.from(codes.values()).filter((e) => e.status === "paired");
 }
 
+// --- Service ads --------------------------------------------------------
+//
+// Admin-wide ads with a play `interval`: after every N regular ads shown on
+// a TV, the next service ad is due. If a TV has fewer regular ads than N,
+// the interval is clamped down to that TV's ad count (so e.g. a TV with a
+// single ad still gets the service ad, after that 1 ad).
+
+export function createServiceAd({ mediaUrl, mediaType, durationSeconds, interval, targetTvCodes }) {
+  const ad = {
+    id: generateServiceAdId(),
+    mediaUrl,
+    mediaType: mediaType || "image",
+    durationSeconds: Math.max(1, Number(durationSeconds) || 1),
+    interval: Math.max(1, Number(interval) || 1),
+    // null/undefined = play on every TV. A non-empty array restricts the ad
+    // to just those TV codes.
+    targetTvCodes:
+      Array.isArray(targetTvCodes) && targetTvCodes.length > 0
+        ? targetTvCodes.map(String)
+        : null,
+  };
+  serviceAds.set(ad.id, ad);
+  notifyAll();
+  return ad;
+}
+
+export function listServiceAds() {
+  return Array.from(serviceAds.values());
+}
+
+// Edits an existing service ad's duration and/or play interval (how many
+// regular ads must play before this one is shown again).
+export function updateServiceAd(id, { durationSeconds, interval, targetTvCodes }) {
+  const ad = serviceAds.get(id);
+  if (!ad) return null;
+  if (durationSeconds !== undefined) {
+    ad.durationSeconds = Math.max(1, Number(durationSeconds) || 1);
+  }
+  if (interval !== undefined) {
+    ad.interval = Math.max(1, Number(interval) || 1);
+  }
+  if (targetTvCodes !== undefined) {
+    ad.targetTvCodes =
+      Array.isArray(targetTvCodes) && targetTvCodes.length > 0
+        ? targetTvCodes.map(String)
+        : null;
+  }
+  notifyAll();
+  return ad;
+}
+
+export function deleteServiceAd(id) {
+  const removed = serviceAds.delete(id);
+  if (removed) notifyAll();
+  return removed;
+}
+
+
+// Interleaves the admin-wide service ads into one TV's own playlist. The
+// regular playlist order is preserved; a service ad is inserted right after
+// every `interval`-th regular ad (interval clamped to the playlist length
+// so short playlists still get service ads instead of never reaching N).
+function mergeServiceAds(regularPlaylist, ads, code) {
+  // A null/empty targetTvCodes means the ad plays on every TV; otherwise it
+  // only applies to the TV codes explicitly selected for it.
+  const applicable = ads.filter(
+    (ad) => !ad.targetTvCodes || ad.targetTvCodes.includes(code)
+  );
+  if (applicable.length === 0) return regularPlaylist;
+  if (regularPlaylist.length === 0) {
+    return applicable.map((ad) => ({
+      mediaType: ad.mediaType,
+      mediaUrl: ad.mediaUrl,
+      durationSeconds: ad.durationSeconds,
+    }));
+  }
+
+  const result = [];
+  for (let i = 0; i < regularPlaylist.length; i++) {
+    result.push(regularPlaylist[i]);
+    const position = i + 1; // count of regular ads shown so far, 1-based
+    for (const ad of applicable) {
+      const effectiveInterval = Math.min(ad.interval, regularPlaylist.length);
+      if (position % effectiveInterval === 0) {
+        result.push({
+          mediaType: ad.mediaType,
+          mediaUrl: ad.mediaUrl,
+          durationSeconds: ad.durationSeconds,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+export function getEffectivePlaylist(entry) {
+  return mergeServiceAds(entry.playlist, listServiceAds(), entry.code);
+}
+
 // --- SSE plumbing -----------------------------------------------------
 
 function publicView(entry) {
   return {
     status: entry.status,
     nickname: entry.nickname,
-    playlist: entry.playlist,
+    playlist: getEffectivePlaylist(entry),
   };
 }
 function notify(entry) {
@@ -108,6 +234,15 @@ function notify(entry) {
     } catch {
       entry.subscribers.delete(controller);
     }
+  }
+}
+
+// Called whenever the admin-wide service ads change, since that changes
+// every paired TV's effective playlist even though entry.playlist itself
+// (the regular per-TV ads) did not change.
+function notifyAll() {
+  for (const entry of codes.values()) {
+    notify(entry);
   }
 }
 
