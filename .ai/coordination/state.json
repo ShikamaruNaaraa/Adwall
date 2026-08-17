@@ -1,0 +1,237 @@
+{
+  "version": 1,
+  "revision": 13,
+  "workspace": "adwall",
+  "created_at": 1786775438.148324,
+  "updated_at": 1786775793.7863638,
+  "settings": {
+    "lease_seconds": 1800,
+    "heartbeat_seconds": 300,
+    "node_timeout_seconds": 180
+  },
+  "nodes": {},
+  "agents": {
+    "claude": {
+      "participant": "claude",
+      "node_id": "local",
+      "agent": "claude",
+      "status": "idle",
+      "task_id": "d16b66e51f92",
+      "goal": "Add a small addition to README.md (user testing coordination workflow)",
+      "joined_at": 1786775438.1483405,
+      "last_seen": 1786775631.715605,
+      "plan": {
+        "goal": "Add a small addition to README.md (user testing coordination workflow)",
+        "task_id": "d16b66e51f92",
+        "created_at": 1786775553.5917826,
+        "updated_at": 1786775556.7151117,
+        "files_to_edit": [
+          "README.md"
+        ],
+        "files_to_read": [],
+        "apis": [],
+        "changes": [],
+        "dependencies": []
+      },
+      "requested_files": [],
+      "last_completion": null
+    },
+    "chatgpt": {
+      "participant": "chatgpt",
+      "node_id": "local",
+      "agent": "chatgpt",
+      "status": "idle",
+      "task_id": "a16b7ac649b4",
+      "goal": "Add a few test lines to README.md to verify shared workspace editing.",
+      "joined_at": 1786775543.0852687,
+      "last_seen": 1786775793.7863085,
+      "plan": {
+        "goal": "Add a few test lines to README.md to verify shared workspace editing.",
+        "task_id": "a16b7ac649b4",
+        "created_at": 1786775675.5829055,
+        "updated_at": 1786775681.30381,
+        "files_to_edit": [
+          "README.md"
+        ],
+        "files_to_read": [
+          "README.md"
+        ],
+        "apis": [],
+        "changes": [
+          "Append clearly labeled test lines without changing existing content."
+        ],
+        "dependencies": []
+      },
+      "requested_files": [],
+      "last_completion": null
+    }
+  },
+  "file_locks": {},
+  "decisions": [],
+  "messages": [],
+  "completions": [],
+  "history": [
+    {
+      "id": "h_43d81d3e7c5c",
+      "at": 1786775438.1483822,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "joined",
+      "target": "",
+      "detail": ""
+    },
+    {
+      "id": "h_202e2574e8e8",
+      "at": 1786775438.1483955,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "join",
+      "target": "",
+      "detail": "(implicit - no goal declared)"
+    },
+    {
+      "id": "h_ccbb44ba0eef",
+      "at": 1786775543.0852964,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "joined",
+      "target": "",
+      "detail": ""
+    },
+    {
+      "id": "h_d87136543d05",
+      "at": 1786775543.085312,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "join",
+      "target": "",
+      "detail": "(implicit - no goal declared)"
+    },
+    {
+      "id": "h_ff4017dee365",
+      "at": 1786775546.623015,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "join",
+      "target": "",
+      "detail": "Inspect shared coordination state and determine whether README.md is currently owned by another agent before modifying it."
+    },
+    {
+      "id": "h_ea499f106dbe",
+      "at": 1786775553.591832,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "status",
+      "target": "planning",
+      "detail": "idle -> planning"
+    },
+    {
+      "id": "h_7fcbd9d4793e",
+      "at": 1786775553.59184,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "plan",
+      "target": "",
+      "detail": "Add a small addition to README.md (user testing coordination workflow)"
+    },
+    {
+      "id": "h_c4c9e06ec211",
+      "at": 1786775556.7151496,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "acquire",
+      "target": "README.md",
+      "detail": ""
+    },
+    {
+      "id": "h_569f493c7d63",
+      "at": 1786775556.7151668,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "status",
+      "target": "working",
+      "detail": "planning -> working"
+    },
+    {
+      "id": "h_099e818aadea",
+      "at": 1786775631.715633,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "release",
+      "target": "README.md",
+      "detail": ""
+    },
+    {
+      "id": "h_9271e35cdffc",
+      "at": 1786775631.715652,
+      "agent": "claude",
+      "node_id": "local",
+      "action": "status",
+      "target": "idle",
+      "detail": "working -> idle"
+    },
+    {
+      "id": "h_cae937c1f1d7",
+      "at": 1786775670.4843035,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "join",
+      "target": "",
+      "detail": "Add a few test lines to README.md to verify shared workspace editing."
+    },
+    {
+      "id": "h_b6149ba247e4",
+      "at": 1786775675.5829527,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "status",
+      "target": "planning",
+      "detail": "idle -> planning"
+    },
+    {
+      "id": "h_076360d05ded",
+      "at": 1786775675.5829673,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "plan",
+      "target": "",
+      "detail": "Add a few test lines to README.md to verify shared workspace editing."
+    },
+    {
+      "id": "h_8146945eb52c",
+      "at": 1786775681.3038528,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "acquire",
+      "target": "README.md",
+      "detail": ""
+    },
+    {
+      "id": "h_5331203bdf87",
+      "at": 1786775681.3038764,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "status",
+      "target": "working",
+      "detail": "planning -> working"
+    },
+    {
+      "id": "h_63cd6a03c4c2",
+      "at": 1786775793.7863302,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "release",
+      "target": "README.md",
+      "detail": ""
+    },
+    {
+      "id": "h_8b4d2036a498",
+      "at": 1786775793.7863433,
+      "agent": "chatgpt",
+      "node_id": "local",
+      "action": "status",
+      "target": "idle",
+      "detail": "working -> idle"
+    }
+  ]
+}

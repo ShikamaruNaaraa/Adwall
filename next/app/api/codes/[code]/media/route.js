@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
-import { getEntry, setMedia } from "../../../../../lib/store";
-
+import { getEntry, setPlaylist } from "../../../../../lib/store";
 const MEDIA_DIR = path.join(process.cwd(), "media_files");
 
 function mediaTypeFor(fileName) {
@@ -21,8 +20,12 @@ export async function POST(request, { params }) {
 
   const form = await request.formData();
   const file = form.get("file");
+  const durationSeconds = Number(form.get("duration_seconds") ?? 10);
   if (!file || typeof file === "string") {
     return NextResponse.json({ detail: "file is required" }, { status: 400 });
+  }
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 1) {
+    return NextResponse.json({ detail: "duration_seconds must be at least 1" }, { status: 400 });
   }
 
   await mkdir(MEDIA_DIR, { recursive: true });
@@ -32,7 +35,15 @@ export async function POST(request, { params }) {
   await writeFile(filePath, bytes);
 
   const mediaUrl = `/media/${safeName}`;
-  setMedia(code, { mediaType: mediaTypeFor(file.name), mediaUrl });
+  const playlist = [
+    ...entry.playlist,
+    {
+      mediaType: mediaTypeFor(file.name),
+      mediaUrl,
+      durationSeconds,
+    },
+  ];
+  setPlaylist(code, playlist);
 
-  return NextResponse.json({ media_url: mediaUrl });
+  return NextResponse.json({ media_url: mediaUrl, playlist });
 }

@@ -39,9 +39,10 @@ dependencies:
   # the Next.js API routes).
   http: ^1.2.2
   flutter_dotenv: ^5.2.1
+  shared_preferences: ^2.5.3
 
   # Admin: pick an image/video file to push to a TV.
-  file_picker: ^11.0.3
+  file_picker: ^12.0.0
   # TV: play a pushed video full-screen.
   video_player: ^2.9.2
 

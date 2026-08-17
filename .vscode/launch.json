@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Phone",
+      "cwd": "adwall",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "1A081FDEE005FT",
+      "program": "lib/main_admin.dart",
+      "flutterMode": "debug",
+      "args": [
+        "--flavor",
+        "admin"
+      ]
+    },
+    {
+      "name": "TV",
+      "cwd": "adwall",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "emulator-5554",
+      "program": "lib/main_tv.dart",
+      "flutterMode": "debug",
+      "args": [
+        "--flavor",
+        "tv"
+      ]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Admin Phone + TV",
+      "configurations": [
+        "Phone",
+        "TV"
+      ]
+    }
+  ]
+}

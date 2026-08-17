@@ -1,0 +1,114 @@
+[
+  {
+    "task_id": "task-9659e6eaac",
+    "goal": "inspect the Adwall project structure and report what the main Flutter application contains. do not modify any files.",
+    "state": "agent_selected",
+    "first_agent": "claude",
+    "base_branch": "main",
+    "branches": {
+      "claude": "claude/task-9659e6eaac"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786733550.8391654,
+    "updated_at": 1786733562.8727477,
+    "closed_at": null,
+    "result": ""
+  },
+  {
+    "task_id": "task-29fc3ce040",
+    "goal": "inspect the Adwall project structure and report what the main Flutter application contains. do not modify any files.",
+    "state": "agent_selected",
+    "first_agent": "chatgpt",
+    "base_branch": "main",
+    "branches": {
+      "chatgpt": "chatgpt/task-29fc3ce040"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786733716.987542,
+    "updated_at": 1786733726.231933,
+    "closed_at": null,
+    "result": ""
+  },
+  {
+    "task_id": "task-3d571c78e4",
+    "goal": "inspect the Adwall project structure and report what the main Flutter application contains. do not modify any files.",
+    "state": "agent_selected",
+    "first_agent": "chatgpt",
+    "base_branch": "main",
+    "branches": {
+      "chatgpt": "chatgpt/task-3d571c78e4"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786733937.744819,
+    "updated_at": 1786733943.565543,
+    "closed_at": null,
+    "result": ""
+  },
+  {
+    "task_id": "task-8a3b2a34c0",
+    "goal": "inspect the Adwall project structure and report what the main Flutter application contains. do not modify any files.",
+    "state": "agent_selected",
+    "first_agent": "chatgpt",
+    "base_branch": "main",
+    "branches": {
+      "chatgpt": "chatgpt/task-8a3b2a34c0"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786733955.9613085,
+    "updated_at": 1786733962.0509017,
+    "closed_at": null,
+    "result": ""
+  },
+  {
+    "task_id": "task-dab42977a1",
+    "goal": "inspect the Adwall project structure and report what the main Flutter application contains. do not modify any files.",
+    "state": "agent_selected",
+    "first_agent": "claude",
+    "base_branch": "main",
+    "branches": {
+      "claude": "claude/task-dab42977a1"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786734182.9030309,
+    "updated_at": 1786734263.7208343,
+    "closed_at": null,
+    "result": ""
+  },
+  {
+    "task_id": "task-7a49c2d3e6",
+    "goal": "claude must open README.md, add a short comment confirming that claude can access and modify the shared workspace, validate the change, and hand the task to chatgpt. chatgpt must then open the same README.md, add a short comment confirming that it received the handoff from claude and can modify the shared workspace, validate the change, and complete the task. both agents must actually use the cody tools and the orchestrate handoff/complete actions. do not merely describe the actions in text.",
+    "state": "agent_selected",
+    "first_agent": "claude",
+    "base_branch": "main",
+    "branches": {
+      "claude": "claude/task-7a49c2d3e6"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786734627.2430096,
+    "updated_at": 1786734807.8736901,
+    "closed_at": null,
+    "result": ""
+  },
+  {
+    "task_id": "task-17cd795147",
+    "goal": "claude must open README.md, add a short comment confirming that claude can access and modify the shared workspace, validate the change, and hand the task to chatgpt. chatgpt must then open the same README.md, add a short comment confirming that it received the handoff from claude and can modify the shared workspace, validate the change, and complete the task. both agents must actually use the cody tools and the orchestrate handoff/complete actions. do not merely describe the actions in text.",
+    "state": "task_created",
+    "first_agent": "claude",
+    "base_branch": "main",
+    "branches": {
+      "claude": "claude/task-17cd795147"
+    },
+    "handoffs": 0,
+    "max_handoffs": 12,
+    "created_at": 1786735121.375344,
+    "updated_at": 1786735121.3753443,
+    "closed_at": null,
+    "result": ""
+  }
+]

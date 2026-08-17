@@ -71,9 +71,9 @@ class _TvListScreenState extends State<TvListScreen> {
                   leading: const Icon(Icons.tv),
                   title: Text(tv.nickname),
                   subtitle: Text(
-                    tv.mediaUrl == null
-                        ? 'No media set'
-                        : 'Showing ${tv.mediaType} · ${tv.mediaUrl}',
+                    tv.playlist.isEmpty
+                        ? 'No ads set'
+                        : '${tv.playlist.length} ad(s) configured',
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
@@ -113,53 +113,88 @@ class TvMediaScreen extends StatefulWidget {
 }
 
 class _TvMediaScreenState extends State<TvMediaScreen> {
+  late List<PlaylistItem> _playlist;
   bool _uploading = false;
   String? _error;
-  String? _lastMediaUrl;
+  int _defaultDuration = 10;
 
   @override
   void initState() {
     super.initState();
-    _lastMediaUrl = widget.tv.mediaUrl;
+    _playlist = List.of(widget.tv.playlist);
+    if (_playlist.isNotEmpty) _defaultDuration = _playlist.first.durationSeconds;
   }
 
   Future<void> _pickAndSend() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
+      // Multiple selection is required for adding several ads at once.
+      // ignore: deprecated_member_use
+      allowMultiple: true,
       allowedExtensions: [
-        'png', 'jpg', 'jpeg', 'gif', 'webp', // images
-        'mp4', 'mov', 'm4v', 'webm', // videos
+        'png', 'jpg', 'jpeg', 'gif', 'webp',
+        'mp4', 'mov', 'm4v', 'webm',
       ],
     );
-    if (result == null || result.files.isEmpty) return;
-
-    final file = result.files.single;
-    if (file.path == null) {
-      setState(() => _error = "Couldn't read the selected file.");
-      return;
-    }
+    if (result.isEmpty) return;
 
     setState(() {
       _uploading = true;
       _error = null;
     });
     try {
-      final mediaUrl = await widget.pairingService.uploadMedia(
-        widget.tv.code,
-        filePath: file.path!,
-        fileName: file.name,
-      );
-      setState(() => _lastMediaUrl = mediaUrl);
+      for (final file in result) {
+        if (file.path == null) continue;
+        final updated = await widget.pairingService.uploadMedia(
+          widget.tv.code,
+          filePath: file.path!,
+          fileName: file.name,
+          durationSeconds: _defaultDuration,
+        );
+        if (mounted) setState(() => _playlist = updated);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sent to "${widget.tv.nickname}"')),
+          SnackBar(content: Text('${result.length} item(s) added to "${widget.tv.nickname}"')),
         );
       }
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
-      setState(() => _uploading = false);
+      if (mounted) setState(() => _uploading = false);
     }
+  }
+
+  Future<void> _setDurationForAll() async {
+    final controller = TextEditingController(text: _defaultDuration.toString());
+    final value = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Duration for all ads'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Seconds'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final seconds = int.tryParse(controller.text);
+              if (seconds != null && seconds >= 1) Navigator.pop(context, seconds);
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (value == null || !mounted) return;
+    setState(() => _defaultDuration = value);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('New ads will use $value seconds. Existing ads keep their durations.')),
+    );
   }
 
   @override
@@ -167,20 +202,48 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(widget.tv.nickname)),
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              _lastMediaUrl == null
-                  ? 'Nothing playing on this TV yet.'
-                  : 'Currently showing: $_lastMediaUrl',
+            Row(
+              children: [
+                Expanded(child: Text('${_playlist.length} ad(s)')),
+                OutlinedButton.icon(
+                  onPressed: _setDurationForAll,
+                  icon: const Icon(Icons.timer),
+                  label: const Text('Same time for all'),
+                ),
+              ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
+            Expanded(
+              child: _playlist.isEmpty
+                  ? const Center(child: Text('No ads added yet.'))
+                  : ListView.separated(
+                      itemCount: _playlist.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final item = _playlist[index];
+                        return Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.image),
+                            title: Text(item.mediaUrl.split('/').last),
+                            subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.remove_circle_outline),
+                              onPressed: () {
+                                setState(() => _playlist.removeAt(index));
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
             FilledButton.icon(
               onPressed: _uploading ? null : _pickAndSend,
-              icon: const Icon(Icons.upload),
-              label: Text(_uploading ? 'Sending...' : 'Add image / video'),
+              icon: const Icon(Icons.add_photo_alternate),
+              label: Text(_uploading ? 'Uploading...' : 'Add images'),
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),

@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:shared_preferences/shared_preferences.dart';
 /// Base URL of the AdWall pairing backend (the Next.js API routes in
 /// /next/app/api), read from the API_BASE_URL key in .env (loaded once in
 /// main_admin.dart / main_tv.dart before runApp()). Edit .env directly to
@@ -27,9 +27,43 @@ class PairingException implements Exception {
 class PairingService {
   PairingService({String? baseUrl}) : _baseUrl = baseUrl ?? _apiBaseUrl;
 
+  static const _deviceIdKey = 'tv_device_id';
+  static const _pairedCodeKey = 'tv_paired_code';
+  static const _pairedNicknameKey = 'tv_paired_nickname';
+
   final String _baseUrl;
 
   Uri _uri(String path) => Uri.parse('$_baseUrl$path');
+
+  Future<String> getDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(_deviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final id = '${DateTime.now().microsecondsSinceEpoch}-${_baseUrl.hashCode}';
+    await prefs.setString(_deviceIdKey, id);
+    return id;
+  }
+
+  Future<PairedTv?> getSavedPairing() async {
+    final prefs = await SharedPreferences.getInstance();
+    final code = prefs.getString(_pairedCodeKey);
+    final nickname = prefs.getString(_pairedNicknameKey);
+    if (code == null || nickname == null) return null;
+    return PairedTv(code: code, nickname: nickname);
+  }
+
+  Future<void> savePairing({required String code, required String nickname}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pairedCodeKey, code);
+    await prefs.setString(_pairedNicknameKey, nickname);
+  }
+
+  Future<void> clearPairing() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_pairedCodeKey);
+    await prefs.remove(_pairedNicknameKey);
+  }
+
 
   /// Turns a relative path the backend hands back (e.g. '/media/abc.png')
   /// into a full URL the Flutter side can load images/video from.
@@ -134,13 +168,13 @@ class PairingService {
         .toList();
   }
 
-  /// Admin side: upload an image/video file and push it to the TV paired
-  /// under [code]. Returns the resolved media URL the TV will load.
-  Future<String> uploadMedia(String code, {
+  Future<List<PlaylistItem>> uploadMedia(String code, {
     required String filePath,
     required String fileName,
+    required int durationSeconds,
   }) async {
     final req = http.MultipartRequest('POST', _uri('/api/codes/$code/media'));
+    req.fields['duration_seconds'] = durationSeconds.toString();
     req.files.add(await http.MultipartFile.fromPath(
       'file',
       filePath,
@@ -152,7 +186,9 @@ class PairingService {
       throw PairingException(_errorMessage(res));
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    return resolveMediaUrl(body['media_url'] as String);
+    return (body['playlist'] as List<dynamic>)
+        .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+        .toList();
   }
 
 
@@ -167,24 +203,49 @@ class PairingService {
   }
 }
 
-/// A TV the admin has paired with, as returned by GET /tvs.
+class PlaylistItem {
+  const PlaylistItem({
+    required this.mediaType,
+    required this.mediaUrl,
+    required this.durationSeconds,
+  });
+
+  factory PlaylistItem.fromJson(Map<String, dynamic> json) => PlaylistItem(
+        mediaType: json['mediaType'] as String? ??
+            json['media_type'] as String? ?? 'image',
+        mediaUrl: json['mediaUrl'] as String? ?? json['media_url'] as String,
+        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ??
+            (json['duration_seconds'] as num?)?.toInt() ?? 10,
+      );
+
+  final String mediaType;
+  final String mediaUrl;
+  final int durationSeconds;
+}
+
 class TvSummary {
   const TvSummary({
     required this.code,
     required this.nickname,
-    required this.mediaType,
-    required this.mediaUrl,
+    required this.playlist,
   });
 
   factory TvSummary.fromJson(Map<String, dynamic> json) => TvSummary(
         code: json['code'] as String,
         nickname: json['nickname'] as String,
-        mediaType: json['media_type'] as String?,
-        mediaUrl: json['media_url'] as String?,
+        playlist: (json['playlist'] as List<dynamic>? ?? [])
+            .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+            .toList(),
       );
 
   final String code;
   final String nickname;
-  final String? mediaType; // "image" | "video" | null
-  final String? mediaUrl;
+  final List<PlaylistItem> playlist;
+}
+
+class PairedTv {
+  const PairedTv({required this.code, required this.nickname});
+
+  final String code;
+  final String nickname;
 }
