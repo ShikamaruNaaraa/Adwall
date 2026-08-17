@@ -3,21 +3,23 @@ import { getEntry, updatePlaylistItem, removePlaylistItem, ensureHydrated } from
 
 // PATCH /api/codes/{code}/playlist - edit one ad already on this TV's
 // playlist (identified by its position) without re-uploading it.
-// JSON body: { index, duration_seconds }
+// JSON body: { index, duration_seconds, admin_username }. admin_username
+// scopes this to TVs the caller owns.
 export async function PATCH(request, { params }) {
   await ensureHydrated();
   const { code } = await params;
-
-  const entry = getEntry(code);
-  if (!entry) {
-    return NextResponse.json({ detail: "Unknown or expired code" }, { status: 404 });
-  }
 
   let body;
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ detail: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const adminUsername = (body?.admin_username || "").trim() || null;
+  const entry = getEntry(code);
+  if (!entry || (entry.adminUsername || null) !== adminUsername) {
+    return NextResponse.json({ detail: "Unknown or expired code" }, { status: 404 });
   }
 
   const index = Number(body?.index);
@@ -40,18 +42,21 @@ export async function PATCH(request, { params }) {
   return NextResponse.json({ playlist });
 }
 
-// DELETE /api/codes/{code}/playlist?index=N - remove one ad already on
-// this TV's playlist (identified by its position).
+// DELETE /api/codes/{code}/playlist?index=N&admin_username=... - remove one
+// ad already on this TV's playlist (identified by its position).
+// admin_username scopes this to TVs the caller owns.
 export async function DELETE(request, { params }) {
   await ensureHydrated();
   const { code } = await params;
+  const url = new URL(request.url);
 
+  const adminUsername = url.searchParams.get("admin_username");
   const entry = getEntry(code);
-  if (!entry) {
+  if (!entry || (entry.adminUsername || null) !== (adminUsername || null)) {
     return NextResponse.json({ detail: "Unknown or expired code" }, { status: 404 });
   }
 
-  const index = Number(new URL(request.url).searchParams.get("index"));
+  const index = Number(url.searchParams.get("index"));
   if (!Number.isInteger(index) || index < 0) {
     return NextResponse.json({ detail: "index is required" }, { status: 400 });
   }
@@ -62,4 +67,5 @@ export async function DELETE(request, { params }) {
   }
   return NextResponse.json({ playlist });
 }
+
 

@@ -180,10 +180,15 @@ class PairingService {
         as String;
   }
 
-  /// Admin side: every TV currently paired, so the admin can pick one to
-  /// send an image/video to.
+  /// Admin side: every TV currently paired that this admin registered - the
+  /// backend scopes the result to admin_username so admins never see each
+  /// other's TVs.
   Future<List<TvSummary>> fetchTvs() async {
-    final res = await http.get(_uri('/api/tvs'));
+    final adminUsername = await getLoggedInAdmin();
+    final uri = _uri('/api/tvs').replace(queryParameters: {
+      if (adminUsername != null) 'admin_username': adminUsername,
+    });
+    final res = await http.get(uri);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
@@ -195,9 +200,14 @@ class PairingService {
 
   /// Admin side: permanently remove a TV. Closes its live connection (if
   /// any) and frees the pairing code for reuse. If this was the TV's own
-  /// saved pairing, callers should also call [clearPairing].
+  /// saved pairing, callers should also call [clearPairing]. Only succeeds
+  /// for a TV registered by the currently logged-in admin.
   Future<void> deleteTv(String code) async {
-    final res = await http.delete(_uri('/api/codes/$code'));
+    final adminUsername = await getLoggedInAdmin();
+    final uri = _uri('/api/codes/$code').replace(queryParameters: {
+      if (adminUsername != null) 'admin_username': adminUsername,
+    });
+    final res = await http.delete(uri);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
@@ -208,8 +218,10 @@ class PairingService {
     required String fileName,
     required int durationSeconds,
   }) async {
+    final adminUsername = await getLoggedInAdmin();
     final req = http.MultipartRequest('POST', _uri('/api/codes/$code/media'));
     req.fields['duration_seconds'] = durationSeconds.toString();
+    if (adminUsername != null) req.fields['admin_username'] = adminUsername;
     req.files.add(await http.MultipartFile.fromPath(
       'file',
       filePath,
@@ -229,15 +241,18 @@ class PairingService {
   /// Admin side: upload one ad and attach it to every TV in [codes], so the
   /// same file can be shown on multiple TVs without re-uploading it.
   /// Returns the code the ad was uploaded for -> that TV's updated playlist.
+  /// All codes must belong to the currently logged-in admin.
   Future<Map<String, List<PlaylistItem>>> uploadMediaToTvs({
     required List<String> codes,
     required String filePath,
     required String fileName,
     required int durationSeconds,
   }) async {
+    final adminUsername = await getLoggedInAdmin();
     final req = http.MultipartRequest('POST', _uri('/api/media'));
     req.fields['duration_seconds'] = durationSeconds.toString();
     req.fields['codes'] = jsonEncode(codes);
+    if (adminUsername != null) req.fields['admin_username'] = adminUsername;
     req.files.add(await http.MultipartFile.fromPath(
       'file',
       filePath,
@@ -257,6 +272,7 @@ class PairingService {
               .toList(),
         ));
   }
+
 
   /// Admin side: every service ad (admin-wide ad + duration + play
   /// interval), inserted automatically into every TV's ad sequence.
@@ -340,10 +356,15 @@ class PairingService {
     required int index,
     required int durationSeconds,
   }) async {
+    final adminUsername = await getLoggedInAdmin();
     final res = await http.patch(
       _uri('/api/codes/$code/playlist'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'index': index, 'duration_seconds': durationSeconds}),
+      body: jsonEncode({
+        'index': index,
+        'duration_seconds': durationSeconds,
+        if (adminUsername != null) 'admin_username': adminUsername,
+      }),
     );
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
@@ -357,7 +378,12 @@ class PairingService {
   /// Admin side: remove one ad already on a TV's playlist (identified by
   /// its position).
   Future<List<PlaylistItem>> removePlaylistItem(String code, {required int index}) async {
-    final res = await http.delete(_uri('/api/codes/$code/playlist?index=$index'));
+    final adminUsername = await getLoggedInAdmin();
+    final uri = _uri('/api/codes/$code/playlist').replace(queryParameters: {
+      'index': index.toString(),
+      if (adminUsername != null) 'admin_username': adminUsername,
+    });
+    final res = await http.delete(uri);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
@@ -371,10 +397,14 @@ class PairingService {
   /// The TV app receives this over its live SSE stream and rotates its
   /// playback layout to match.
   Future<String> updateTvOrientation(String code, String orientation) async {
+    final adminUsername = await getLoggedInAdmin();
     final res = await http.patch(
       _uri('/api/codes/$code/orientation'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'orientation': orientation}),
+      body: jsonEncode({
+        'orientation': orientation,
+        if (adminUsername != null) 'admin_username': adminUsername,
+      }),
     );
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
@@ -382,6 +412,7 @@ class PairingService {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return body['orientation'] as String;
   }
+
 
   static const _settingsChannel = MethodChannel('adwall/settings');
 
