@@ -8,6 +8,10 @@
 // and a warning is logged instead of throwing.
 
 import mysql from "mysql2/promise";
+import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "crypto";
+import { promisify } from "util";
+
+const scrypt = promisify(scryptCallback);
 
 const DATABASE_URL =
   process.env.DATABASE_URL || "mysql://adwall_user:root@localhost:3306/adwall";
@@ -24,8 +28,24 @@ const CREATE_TABLE_SQL = `
     nickname VARCHAR(255) NOT NULL,
     tv_device_id VARCHAR(255),
     status VARCHAR(20) NOT NULL DEFAULT 'pending', /* 'pending' | 'paired' */
+    playlist TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     paired_at DATETIME NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  );
+`;
+
+// Admin accounts, created by the master admin (see /api/admins). Passwords
+// are never stored in plain text - see hashPassword/verifyPassword below.
+// must_change_password starts true so a freshly created admin is prompted
+// to pick their own password the first time they log in.
+const CREATE_ADMINS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS admins (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   );
 `;
@@ -33,30 +53,75 @@ const CREATE_TABLE_SQL = `
 let schemaReadyPromise = null;
 
 // Runs once per server process; idempotent (CREATE TABLE IF NOT EXISTS).
+// Also adds the playlist column to tables created before it existed.
 function ensureSchema() {
   if (!schemaReadyPromise) {
-    schemaReadyPromise = pool.query(CREATE_TABLE_SQL).catch((err) => {
-      console.warn("[db] failed to ensure tv_connections table exists:", err.message);
-      schemaReadyPromise = null; // allow retry on next call
-      throw err;
-    });
+    schemaReadyPromise = pool
+      .query(CREATE_TABLE_SQL)
+      .then(() =>
+        pool
+          .query("ALTER TABLE tv_connections ADD COLUMN playlist TEXT NULL")
+          .catch(() => {})
+      )
+      .then(() =>
+        pool
+          .query(
+            "ALTER TABLE tv_connections ADD COLUMN admin_username VARCHAR(255) NULL"
+          )
+          .catch(() => {})
+      )
+      .then(() =>
+        pool
+          .query(
+            "ALTER TABLE tv_connections ADD COLUMN orientation VARCHAR(20) NOT NULL DEFAULT 'landscape'"
+          )
+          .catch(() => {})
+      )
+      .then(() => pool.query(CREATE_ADMINS_TABLE_SQL))
+      .catch((err) => {
+        console.warn("[db] failed to ensure tv_connections table exists:", err.message);
+        schemaReadyPromise = null; // allow retry on next call
+        throw err;
+      });
   }
   return schemaReadyPromise;
 }
 
+// --- Password hashing ---------------------------------------------------
+//
+// scrypt (Node's built-in, no extra dependency) with a random per-password
+// salt, stored together as "salt:hash" (both hex). Verification re-derives
+// the hash with the stored salt and does a constant-time comparison.
+
+async function hashPassword(password) {
+  const salt = randomBytes(16).toString("hex");
+  const derived = await scrypt(password, salt, 64);
+  return `${salt}:${derived.toString("hex")}`;
+}
+
+async function verifyPassword(password, stored) {
+  const [salt, hashHex] = (stored || "").split(":");
+  if (!salt || !hashHex) return false;
+  const expected = Buffer.from(hashHex, "hex");
+  const derived = await scrypt(password, salt, expected.length);
+  if (derived.length !== expected.length) return false;
+  return timingSafeEqual(derived, expected);
+}
+
 /// Insert a new 'pending' row when the admin creates a code.
-export async function recordCodeCreated(code, nickname) {
+export async function recordCodeCreated(code, nickname, adminUsername) {
   try {
     await ensureSchema();
     await pool.query(
-      `INSERT INTO tv_connections (code, nickname, status)
-       VALUES (?, ?, 'pending')
+      `INSERT INTO tv_connections (code, nickname, status, admin_username)
+       VALUES (?, ?, 'pending', ?)
        ON DUPLICATE KEY UPDATE
          nickname = VALUES(nickname),
          status = 'pending',
          tv_device_id = NULL,
-         paired_at = NULL`,
-      [code, nickname]
+         paired_at = NULL,
+         admin_username = VALUES(admin_username)`,
+      [code, nickname, adminUsername || null]
     );
   } catch (err) {
     console.warn("[db] recordCodeCreated failed:", err.message);
@@ -80,4 +145,141 @@ export async function recordCodeClaimed(code, tvDeviceId) {
   }
 }
 
+export async function recordPlaylistUpdated(code, playlist) {
+  try {
+    await ensureSchema();
+    await pool.query(
+      `UPDATE tv_connections SET playlist = ? WHERE code = ?`,
+      [JSON.stringify(playlist), code]
+    );
+  } catch (err) {
+    console.warn("[db] recordPlaylistUpdated failed:", err.message);
+  }
+}
+
+export async function recordOrientationUpdated(code, orientation) {
+  try {
+    await ensureSchema();
+    await pool.query(
+      `UPDATE tv_connections SET orientation = ? WHERE code = ?`,
+      [orientation, code]
+    );
+  } catch (err) {
+    console.warn("[db] recordOrientationUpdated failed:", err.message);
+  }
+}
+
+export async function loadAllPairings() {
+  try {
+    await ensureSchema();
+    const [rows] = await pool.query(
+      `SELECT code, nickname, tv_device_id, status, playlist, admin_username, orientation FROM tv_connections`
+    );
+    return rows.map((row) => ({
+      code: row.code,
+      nickname: row.nickname,
+      tvDeviceId: row.tv_device_id,
+      status: row.status,
+      playlist: row.playlist ? JSON.parse(row.playlist) : [],
+      adminUsername: row.admin_username,
+      orientation: row.orientation || "landscape",
+    }));
+  } catch (err) {
+    console.warn("[db] loadAllPairings failed:", err.message);
+    return [];
+  }
+}
+
+/// Permanently remove a TV's row (used when the admin deletes a TV).
+export async function deleteTvConnection(code) {
+  try {
+    await ensureSchema();
+    await pool.query(`DELETE FROM tv_connections WHERE code = ?`, [code]);
+  } catch (err) {
+    console.warn("[db] deleteTvConnection failed:", err.message);
+  }
+}
+
+// --- Admin accounts -------------------------------------------------------
+//
+// Unlike the TV-connection functions above, these throw on failure instead
+// of swallowing errors: a DB hiccup here must not silently let a login
+// succeed/fail incorrectly or let a duplicate username through.
+
+/// Creates a new admin account with a hashed password. Throws with
+/// code 'DUPLICATE_USERNAME' if the username is already taken.
+export async function createAdmin(username, password) {
+  await ensureSchema();
+  const passwordHash = await hashPassword(password);
+  try {
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, must_change_password)
+       VALUES (?, ?, 1)`,
+      [username, passwordHash]
+    );
+  } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      const dupErr = new Error("Username already exists");
+      dupErr.code = "DUPLICATE_USERNAME";
+      throw dupErr;
+    }
+    throw err;
+  }
+}
+
+/// Verifies a username/password pair. Returns
+/// { username, mustChangePassword } on success, or null if the username
+/// doesn't exist or the password is wrong.
+export async function verifyAdminLogin(username, password) {
+  await ensureSchema();
+  const [rows] = await pool.query(
+    `SELECT username, password_hash, must_change_password FROM admins WHERE username = ?`,
+    [username]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const ok = await verifyPassword(password, row.password_hash);
+  if (!ok) return null;
+  return {
+    username: row.username,
+    mustChangePassword: !!row.must_change_password,
+  };
+}
+
+/// Updates an admin's password (after verifying their current one) and
+/// clears the must_change_password flag. Returns false if the current
+/// password doesn't match or the username doesn't exist.
+export async function changeAdminPassword(username, currentPassword, newPassword) {
+  await ensureSchema();
+  const [rows] = await pool.query(
+    `SELECT password_hash FROM admins WHERE username = ?`,
+    [username]
+  );
+  const row = rows[0];
+  if (!row) return false;
+  const ok = await verifyPassword(currentPassword, row.password_hash);
+  if (!ok) return false;
+  const newHash = await hashPassword(newPassword);
+  await pool.query(
+    `UPDATE admins SET password_hash = ?, must_change_password = 0 WHERE username = ?`,
+    [newHash, username]
+  );
+  return true;
+}
+
+/// Every admin username (for the master dashboard's admin list).
+export async function listAdmins() {
+  await ensureSchema();
+  const [rows] = await pool.query(
+    `SELECT username, must_change_password, created_at FROM admins ORDER BY created_at DESC`
+  );
+  return rows.map((row) => ({
+    username: row.username,
+    mustChangePassword: !!row.must_change_password,
+    createdAt: row.created_at,
+  }));
+}
+
 export { pool };
+
+

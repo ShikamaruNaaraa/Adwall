@@ -64,24 +64,47 @@ class PairingService {
     await prefs.remove(_pairedNicknameKey);
   }
 
+  static const _loggedInAdminKey = 'logged_in_admin_username';
+
+  Future<void> saveLoggedInAdmin(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_loggedInAdminKey, username);
+  }
+
+  Future<String?> getLoggedInAdmin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_loggedInAdminKey);
+  }
+
+  Future<void> clearLoggedInAdmin() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_loggedInAdminKey);
+  }
 
   /// Turns a relative path the backend hands back (e.g. '/media/abc.png')
   /// into a full URL the Flutter side can load images/video from.
   String resolveMediaUrl(String path) =>
       path.startsWith('http') ? path : '$_baseUrl$path';
 
-  /// Admin side: create a new 6-digit code labelled with [nickname].
+  /// Admin side: create a new 6-digit code labelled with [nickname],
+  /// attributed to the currently logged-in admin (if any) so the master
+  /// admin dashboard can show which admin added which TV.
   Future<String> createPairingCode(String nickname) async {
+    final adminUsername = await getLoggedInAdmin();
     final res = await http.post(
       _uri('/api/codes'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'nickname': nickname}),
+      body: jsonEncode({
+        'nickname': nickname,
+        if (adminUsername != null) 'admin_username': adminUsername,
+      }),
     );
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
     return (jsonDecode(res.body) as Map<String, dynamic>)['code'] as String;
   }
+
 
   /// Admin side: live updates for a code, pushed over Server-Sent Events
   /// (GET /api/codes/{code}/events). Emits a map with 'status'
@@ -167,6 +190,16 @@ class PairingService {
     return list
         .map((e) => TvSummary.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Admin side: permanently remove a TV. Closes its live connection (if
+  /// any) and frees the pairing code for reuse. If this was the TV's own
+  /// saved pairing, callers should also call [clearPairing].
+  Future<void> deleteTv(String code) async {
+    final res = await http.delete(_uri('/api/codes/$code'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
   }
 
   Future<List<PlaylistItem>> uploadMedia(String code, {
@@ -320,6 +353,59 @@ class PairingService {
         .toList();
   }
 
+  /// Admin side: set a TV's display orientation ('landscape' or 'portrait').
+  /// The TV app receives this over its live SSE stream and rotates its
+  /// playback layout to match.
+  Future<String> updateTvOrientation(String code, String orientation) async {
+    final res = await http.patch(
+      _uri('/api/codes/$code/orientation'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'orientation': orientation}),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return body['orientation'] as String;
+  }
+
+  Future<AdminLoginResult> adminLogin({
+    required String username,
+    required String password,
+  }) async {
+    final res = await http.post(
+      _uri('/api/admins/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'username': username, 'password': password}),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return AdminLoginResult(
+      username: body['username'] as String,
+      mustChangePassword: body['mustChangePassword'] as bool? ?? false,
+    );
+  }
+
+  Future<void> changeAdminPassword({
+    required String username,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final res = await http.post(
+      _uri('/api/admins/$username/password'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'current_password': currentPassword,
+        'new_password': newPassword,
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+  }
+
   String _errorMessage(http.Response res) {
     try {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -339,11 +425,9 @@ class PlaylistItem {
   });
 
   factory PlaylistItem.fromJson(Map<String, dynamic> json) => PlaylistItem(
-        mediaType: json['mediaType'] as String? ??
-            json['media_type'] as String? ?? 'image',
-        mediaUrl: json['mediaUrl'] as String? ?? json['media_url'] as String,
-        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ??
-            (json['duration_seconds'] as num?)?.toInt() ?? 10,
+        mediaType: json['mediaType'] as String? ?? 'image',
+        mediaUrl: json['mediaUrl'] as String,
+        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 10,
       );
 
   final String mediaType;
@@ -357,6 +441,7 @@ class TvSummary {
     required this.nickname,
     required this.playlist,
     required this.connected,
+    this.orientation = 'landscape',
   });
 
   factory TvSummary.fromJson(Map<String, dynamic> json) => TvSummary(
@@ -368,12 +453,14 @@ class TvSummary {
         // Whether the TV currently has a live connection to the backend.
         // Defaults to true for older backends that don't send this field.
         connected: json['connected'] as bool? ?? true,
+        orientation: json['orientation'] as String? ?? 'landscape',
       );
 
   final String code;
   final String nickname;
   final List<PlaylistItem> playlist;
   final bool connected;
+  final String orientation;
 }
 
 class PairedTv {
@@ -381,6 +468,16 @@ class PairedTv {
 
   final String code;
   final String nickname;
+}
+
+class AdminLoginResult {
+  const AdminLoginResult({
+    required this.username,
+    required this.mustChangePassword,
+  });
+
+  final String username;
+  final bool mustChangePassword;
 }
 
 /// An admin-wide ad that automatically plays on every registered TV, after
@@ -398,14 +495,11 @@ class ServiceAd {
 
   factory ServiceAd.fromJson(Map<String, dynamic> json) => ServiceAd(
         id: json['id'] as String,
-        mediaType: json['mediaType'] as String? ??
-            json['media_type'] as String? ?? 'image',
-        mediaUrl: json['mediaUrl'] as String? ?? json['media_url'] as String,
-        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ??
-            (json['duration_seconds'] as num?)?.toInt() ?? 10,
+        mediaType: json['mediaType'] as String? ?? 'image',
+        mediaUrl: json['mediaUrl'] as String,
+        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 10,
         interval: (json['interval'] as num?)?.toInt() ?? 1,
-        targetTvCodes: ((json['targetTvCodes'] ?? json['target_tv_codes'])
-                as List<dynamic>?)
+        targetTvCodes: (json['targetTvCodes'] as List<dynamic>?)
             ?.map((e) => e.toString())
             .toList(),
       );

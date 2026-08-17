@@ -6,9 +6,23 @@ import '../services/pairing_service.dart';
 /// every registered TV, inserted after every [interval] regular ads that
 /// TV shows (or after 1 ad, if that TV only has a single regular ad).
 class ServiceAdsScreen extends StatefulWidget {
-  const ServiceAdsScreen({super.key, required this.pairingService});
+  const ServiceAdsScreen({
+    super.key,
+    required this.pairingService,
+    this.embedded = false,
+    this.onRefreshCallback,
+  });
 
   final PairingService pairingService;
+
+  /// When true, this screen renders just its body content (no Scaffold or
+  /// AppBar of its own) so it can live inside a host Scaffold - e.g. one
+  /// page of a bottom-nav PageView that already has a shared AppBar.
+  final bool embedded;
+
+  /// Lets an embedding parent (e.g. the shared AppBar's refresh button)
+  /// trigger this screen's own refresh logic.
+  final ValueChanged<VoidCallback>? onRefreshCallback;
 
   @override
   State<ServiceAdsScreen> createState() => _ServiceAdsScreenState();
@@ -23,6 +37,9 @@ class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
   void initState() {
     super.initState();
     _adsFuture = widget.pairingService.fetchServiceAds();
+    widget.onRefreshCallback?.call(() {
+      _refresh();
+    });
   }
 
   Future<void> _refresh() async {
@@ -127,6 +144,100 @@ class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final content = Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'Ads added here play automatically on every registered TV, '
+            'after every N regular ads that TV shows (or after 1 ad, if '
+            'that TV only has a single ad).',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(_error!, style: const TextStyle(color: Colors.red)),
+          ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            child: FutureBuilder<List<ServiceAd>>(
+              future: _adsFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return ListView(
+                    children: [
+                      const SizedBox(height: 80),
+                      Center(child: Text('Failed to load: ${snapshot.error}')),
+                    ],
+                  );
+                }
+                final ads = snapshot.data ?? [];
+                if (ads.isEmpty) {
+                  return ListView(
+                    padding: const EdgeInsets.all(24),
+                    children: const [
+                      SizedBox(height: 60),
+                      Icon(Icons.campaign_outlined, size: 56),
+                      SizedBox(height: 16),
+                      Center(child: Text('No service ads yet.')),
+                    ],
+                  );
+                }
+                return ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: ads.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final ad = ads[index];
+                    return Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.image),
+                        title: Text(ad.mediaUrl.split('/').last),
+                        subtitle: Text(
+                          '${ad.durationSeconds}s · every ${ad.interval} ad(s) · '
+                          '${ad.appliesToAllTvs ? 'All TVs' : '${ad.targetTvCodes!.length} TV(s)'}',
+                        ),
+                        onTap: () => _editServiceAd(ad),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined),
+                              onPressed: () => _editServiceAd(ad),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => _deleteServiceAd(ad),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: FilledButton.icon(
+            onPressed: _adding ? null : _addServiceAd,
+            icon: const Icon(Icons.add_photo_alternate),
+            label: Text(_adding ? 'Adding...' : 'Add service ad'),
+          ),
+        ),
+      ],
+    );
+
+    if (widget.embedded) return content;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Service Ads'),
@@ -134,97 +245,7 @@ class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Ads added here play automatically on every registered TV, '
-              'after every N regular ads that TV shows (or after 1 ad, if '
-              'that TV only has a single ad).',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(_error!, style: const TextStyle(color: Colors.red)),
-            ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _refresh,
-              child: FutureBuilder<List<ServiceAd>>(
-                future: _adsFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return ListView(
-                      children: [
-                        const SizedBox(height: 80),
-                        Center(child: Text('Failed to load: ${snapshot.error}')),
-                      ],
-                    );
-                  }
-                  final ads = snapshot.data ?? [];
-                  if (ads.isEmpty) {
-                    return ListView(
-                      padding: const EdgeInsets.all(24),
-                      children: const [
-                        SizedBox(height: 60),
-                        Icon(Icons.campaign_outlined, size: 56),
-                        SizedBox(height: 16),
-                        Center(child: Text('No service ads yet.')),
-                      ],
-                    );
-                  }
-                  return ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: ads.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final ad = ads[index];
-                      return Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.image),
-                          title: Text(ad.mediaUrl.split('/').last),
-                          subtitle: Text(
-                            '${ad.durationSeconds}s · every ${ad.interval} ad(s) · '
-                            '${ad.appliesToAllTvs ? 'All TVs' : '${ad.targetTvCodes!.length} TV(s)'}',
-                          ),
-                          onTap: () => _editServiceAd(ad),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () => _editServiceAd(ad),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline),
-                                onPressed: () => _deleteServiceAd(ad),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: FilledButton.icon(
-              onPressed: _adding ? null : _addServiceAd,
-              icon: const Icon(Icons.add_photo_alternate),
-              label: Text(_adding ? 'Adding...' : 'Add service ad'),
-            ),
-          ),
-        ],
-      ),
+      body: content,
     );
   }
 }

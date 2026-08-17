@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { claimCode, getEntry } from "../../../../../lib/store";
+import { claimCode, getEntry, ensureHydrated } from "../../../../../lib/store";
 
 export async function POST(request, { params }) {
+  await ensureHydrated();
   const { code } = await params;
 
   let body;

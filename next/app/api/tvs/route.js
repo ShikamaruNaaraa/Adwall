@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { listPairedTvs } from "../../../lib/store";
+import { listPairedTvs, ensureHydrated } from "../../../lib/store";
 
 export async function GET() {
+  await ensureHydrated();
   // Raw per-TV playlist (regular ads only) - this is what the admin edits.
   // The TV itself receives the merged playlist (regular ads + interleaved
   // service ads) separately, over the SSE events endpoint.
@@ -14,6 +15,7 @@ export async function GET() {
     code: e.code,
     nickname: e.nickname,
     playlist: e.playlist,
+    orientation: e.orientation || "landscape",
     connected: e.subscribers.size > 0,
   }));
   return NextResponse.json(tvs);

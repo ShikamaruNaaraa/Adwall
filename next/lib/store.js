@@ -1,24 +1,26 @@
 // Data layer for pairing codes / TVs / media.
 //
 // Backed by an in-memory Map so the API works out of the box, with every
-// pairing/claim event also written to the tv_connections table in Postgres
-// (see lib/db.js) so the connection status between a TV and an admin is
-// recorded durably. DB writes are best-effort: if the database is
-// unreachable, the in-memory store keeps the app fully working and a
-// warning is logged instead of throwing.
+// pairing/claim/playlist event also written to the tv_connections table in
+// MySQL (see lib/db.js) so a TV stays paired forever, even across server
+// restarts. On first use, the in-memory Map is hydrated from that table
+// (see ensureHydrated below). DB writes/reads are best-effort: if the
+// database is unreachable, the in-memory store keeps the app working for
+// the current process and a warning is logged instead of throwing.
 
-import { recordCodeCreated, recordCodeClaimed } from "./db";
+import {
+  recordCodeCreated,
+  recordCodeClaimed,
+  recordPlaylistUpdated,
+  recordOrientationUpdated,
+  loadAllPairings,
+  deleteTvConnection,
+} from "./db";
 
-const DATABASE_URL = process.env.DATABASE_URL || "postgres://dummy:dummy@localhost:5432/adwall";
 
-if (!process.env.DATABASE_URL) {
-  console.warn(
-    "[store] DATABASE_URL not set, using dummy placeholder:",
-    DATABASE_URL
-  );
-}
 // code -> { code, nickname, status: 'pending' | 'paired', tvDeviceId,
 //           playlist: [{ mediaType, mediaUrl, durationSeconds }],
+//           orientation: 'landscape' | 'portrait',
 //           subscribers: Set<controller> }
 //
 // Stored on globalThis rather than as a plain module-scope variable: in
@@ -37,6 +39,35 @@ globalThis.__adwallPairingCodes = codes;
 const serviceAds = globalThis.__adwallServiceAds ?? new Map();
 globalThis.__adwallServiceAds = serviceAds;
 
+async function hydrateFromDatabase() {
+  const rows = await loadAllPairings();
+  for (const row of rows) {
+    if (codes.has(row.code)) continue;
+    codes.set(row.code, {
+      code: row.code,
+      nickname: row.nickname,
+      status: row.status,
+      tvDeviceId: row.tvDeviceId,
+      playlist: row.playlist,
+      adminUsername: row.adminUsername || null,
+      orientation: row.orientation || "landscape",
+      subscribers: new Set(),
+    });
+  }
+}
+
+// Restores previously paired TVs from the database the first time the
+// store is used in this process, so a TV stays paired across server
+// restarts. Shared on globalThis for the same HMR reason as `codes`.
+export function ensureHydrated() {
+  if (!globalThis.__adwallHydration) {
+    globalThis.__adwallHydration = hydrateFromDatabase().catch((err) => {
+      console.warn("[store] failed to hydrate from database:", err.message);
+    });
+  }
+  return globalThis.__adwallHydration;
+}
+
 function generateCode() {
   let code;
   do {
@@ -49,7 +80,7 @@ function generateServiceAdId() {
   return `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function createPairingCode(nickname) {
+export function createPairingCode(nickname, adminUsername) {
   const code = generateCode();
   codes.set(code, {
     code,
@@ -57,11 +88,13 @@ export function createPairingCode(nickname) {
     status: "pending",
     tvDeviceId: null,
     playlist: [],
+    adminUsername: adminUsername || null,
+    orientation: "landscape",
     subscribers: new Set(),
   });
   // Best-effort, fire-and-forget: don't block/await, and never let a DB
   // hiccup break code creation for callers.
-  recordCodeCreated(code, nickname).catch(() => {});
+  recordCodeCreated(code, nickname, adminUsername).catch(() => {});
   return code;
 }
 
@@ -88,6 +121,7 @@ export function setPlaylist(code, playlist) {
     durationSeconds: Math.max(1, Number(item.durationSeconds) || 1),
   }));
   notify(entry);
+  recordPlaylistUpdated(code, entry.playlist).catch(() => {});
   return entry;
 }
 
@@ -102,6 +136,7 @@ export function updatePlaylistItem(code, index, { durationSeconds }) {
     item.durationSeconds = Math.max(1, Number(durationSeconds) || 1);
   }
   notify(entry);
+  recordPlaylistUpdated(code, entry.playlist).catch(() => {});
   return entry.playlist;
 }
 
@@ -114,9 +149,60 @@ export function getPlaylist(code) {
   return entry ? entry.playlist : null;
 }
 
+// Sets a TV's display orientation ('landscape' or 'portrait'). The TV app
+// reads this from its live SSE stream and rotates its playback layout to
+// match.
+export function setOrientation(code, orientation) {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  entry.orientation = orientation === "portrait" ? "portrait" : "landscape";
+  notify(entry);
+  recordOrientationUpdated(code, entry.orientation).catch(() => {});
+  return entry;
+}
+
 export function listPairedTvs() {
   return Array.from(codes.values()).filter((e) => e.status === "paired");
 }
+
+// Every TV (pending or paired), with its owning admin and effective
+// playlist (regular + interleaved service ads) - used by the master admin
+// dashboard to show each admin's TVs and the ads playing on them.
+export function listAllTvs() {
+  return Array.from(codes.values()).map((e) => ({
+    code: e.code,
+    nickname: e.nickname,
+    status: e.status,
+    adminUsername: e.adminUsername || null,
+    orientation: e.orientation || "landscape",
+    connected: e.subscribers.size > 0,
+    playlist: getEffectivePlaylist(e),
+  }));
+}
+
+
+// Removes a TV entirely: tells any live SSE connection it has open that
+// it's been removed (so the TV app can clear its saved pairing and show
+// the pairing screen again) before closing the stream, then drops it from
+// the in-memory map and the database. The TV's pairing code is freed for
+// reuse.
+export function deleteTv(code) {
+  const entry = codes.get(code);
+  if (!entry) return false;
+  const payload = `data: ${JSON.stringify({ status: "removed" })}\n\n`;
+  for (const controller of entry.subscribers) {
+    try {
+      controller.enqueue(payload);
+      controller.close();
+    } catch {
+      // Already closed/errored - nothing to do.
+    }
+  }
+  codes.delete(code);
+  deleteTvConnection(code).catch(() => {});
+  return true;
+}
+
 
 // --- Service ads --------------------------------------------------------
 //
@@ -223,6 +309,7 @@ function publicView(entry) {
   return {
     status: entry.status,
     nickname: entry.nickname,
+    orientation: entry.orientation || "landscape",
     playlist: getEffectivePlaylist(entry),
   };
 }

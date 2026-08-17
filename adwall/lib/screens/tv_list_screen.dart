@@ -114,7 +114,9 @@ class TvMediaScreen extends StatefulWidget {
 
 class _TvMediaScreenState extends State<TvMediaScreen> {
   late List<PlaylistItem> _playlist;
+  late String _orientation;
   bool _uploading = false;
+  bool _savingOrientation = false;
   String? _error;
   int _defaultDuration = 10;
 
@@ -122,7 +124,24 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   void initState() {
     super.initState();
     _playlist = List.of(widget.tv.playlist);
+    _orientation = widget.tv.orientation;
     if (_playlist.isNotEmpty) _defaultDuration = _playlist.first.durationSeconds;
+  }
+
+  Future<void> _setOrientation(String orientation) async {
+    if (orientation == _orientation || _savingOrientation) return;
+    setState(() => _savingOrientation = true);
+    try {
+      final updated = await widget.pairingService.updateTvOrientation(
+        widget.tv.code,
+        orientation,
+      );
+      if (mounted) setState(() => _orientation = updated);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _savingOrientation = false);
+    }
   }
 
   Future<void> _pickAndSend() async {
@@ -308,7 +327,34 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.tv.nickname)),
+      appBar: AppBar(
+        title: Text(widget.tv.nickname),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Center(
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                    value: 'landscape',
+                    icon: Icon(Icons.stay_current_landscape),
+                    label: Text('Horizontal'),
+                  ),
+                  ButtonSegment(
+                    value: 'portrait',
+                    icon: Icon(Icons.stay_current_portrait),
+                    label: Text('Vertical'),
+                  ),
+                ],
+                selected: {_orientation},
+                onSelectionChanged: _savingOrientation
+                    ? null
+                    : (selection) => _setOrientation(selection.first),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(

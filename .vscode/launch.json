@@ -6,7 +6,7 @@
       "cwd": "adwall",
       "request": "launch",
       "type": "dart",
-      "deviceId": "1A081FDEE005FT",
+      "deviceId": "RZGL71BXT9J",
       "program": "lib/main_admin.dart",
       "flutterMode": "debug",
       "args": [

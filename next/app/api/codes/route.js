@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { createPairingCode } from "../../../lib/store";
+import { createPairingCode, ensureHydrated } from "../../../lib/store";
 
 export async function POST(request) {
+  await ensureHydrated();
   let body;
   try {
     body = await request.json();
@@ -13,7 +14,8 @@ export async function POST(request) {
   if (!nickname) {
     return NextResponse.json({ detail: "nickname is required" }, { status: 400 });
   }
+  const adminUsername = (body?.admin_username || "").trim() || null;
 
-  const code = createPairingCode(nickname);
+  const code = createPairingCode(nickname, adminUsername);
   return NextResponse.json({ code });
 }

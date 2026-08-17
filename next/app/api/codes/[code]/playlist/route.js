@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { getEntry, updatePlaylistItem } from "../../../../../lib/store";
+import { getEntry, updatePlaylistItem, ensureHydrated } from "../../../../../lib/store";
 
 // PATCH /api/codes/{code}/playlist - edit one ad already on this TV's
 // playlist (identified by its position) without re-uploading it.
 // JSON body: { index, duration_seconds }
 export async function PATCH(request, { params }) {
+  await ensureHydrated();
   const { code } = await params;
 
   const entry = getEntry(code);

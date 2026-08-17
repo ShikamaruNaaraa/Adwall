@@ -23,8 +23,35 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
   String? _connectedNickname;
   String? _connectedCode;
   List<PlaylistItem> _playlist = [];
+  String _orientation = 'landscape';
   int _selectedIndex = 0;
   StreamSubscription<Map<String, dynamic>>? _pairingSub;
+  bool _navVisible = true;
+  Timer? _navHideTimer;
+
+  void _scheduleNavHide() {
+    _navHideTimer?.cancel();
+    if (_selectedIndex != 1) return;
+    _navHideTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) setState(() => _navVisible = false);
+    });
+  }
+
+  void _revealNav() {
+    _navHideTimer?.cancel();
+    if (!_navVisible) {
+      setState(() => _navVisible = true);
+    }
+    _scheduleNavHide();
+  }
+
+  void _selectDestination(int index) {
+    setState(() {
+      _selectedIndex = index;
+      _navVisible = true;
+    });
+    _scheduleNavHide();
+  }
 
   Future<void> _loadSavedPairing() async {
     try {
@@ -83,9 +110,18 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
   void _listenForMedia(String code) {
     _pairingSub?.cancel();
     _pairingSub = _pairingService.watchPairing(code).listen((data) {
+      if (!mounted) return;
+      if (data['status'] == 'removed') {
+        _disconnect();
+        return;
+      }
       final raw = data['playlist'] as List<dynamic>?;
-      if (!mounted || raw == null) return;
+      if (raw == null) return;
+      final orientation = data['orientation'] as String?;
       setState(() {
+        if (orientation == 'portrait' || orientation == 'landscape') {
+          _orientation = orientation!;
+        }
         _playlist = raw
             .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
             .map((item) => PlaylistItem(
@@ -112,6 +148,21 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
       _connectFocusNode.requestFocus();
       return true;
     }
+    if (event is KeyDownEvent && _selectedIndex == 1) {
+      final okKeys = {
+        LogicalKeyboardKey.select,
+        LogicalKeyboardKey.enter,
+        LogicalKeyboardKey.gameButtonA,
+        LogicalKeyboardKey.arrowUp,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.arrowLeft,
+        LogicalKeyboardKey.arrowRight,
+      };
+      if (okKeys.contains(event.logicalKey)) {
+        _revealNav();
+        return _navVisible;
+      }
+    }
     return false;
   }
 
@@ -130,24 +181,30 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     return Scaffold(
       body: Row(
         children: [
-          NavigationRail(
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (index) => setState(() => _selectedIndex = index),
-            labelType: NavigationRailLabelType.all,
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.link),
-                selectedIcon: Icon(Icons.link_rounded),
-                label: Text('Pairing'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.campaign_outlined),
-                selectedIcon: Icon(Icons.campaign),
-                label: Text('Ads'),
-              ),
-            ],
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+            child: _navVisible
+                ? NavigationRail(
+                    selectedIndex: _selectedIndex,
+                    onDestinationSelected: _selectDestination,
+                    labelType: NavigationRailLabelType.all,
+                    destinations: const [
+                      NavigationRailDestination(
+                        icon: Icon(Icons.link),
+                        selectedIcon: Icon(Icons.link_rounded),
+                        label: Text('Pairing'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.campaign_outlined),
+                        selectedIcon: Icon(Icons.campaign),
+                        label: Text('Ads'),
+                      ),
+                    ],
+                  )
+                : const SizedBox(width: 0),
           ),
-          const VerticalDivider(width: 1),
+          if (_navVisible) const VerticalDivider(width: 1),
           Expanded(
             child: _selectedIndex == 0 ? _buildPairingPage() : _buildAdsPage(),
           ),
@@ -244,10 +301,13 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     if (_playlist.isEmpty) {
       return const Center(child: Text('No ads have been sent to this TV yet.'));
     }
+    final content = _PlaylistDisplay(playlist: _playlist);
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
-      child: _PlaylistDisplay(playlist: _playlist),
+      child: _orientation == 'portrait'
+          ? RotatedBox(quarterTurns: 1, child: content)
+          : content,
     );
   }
 }
