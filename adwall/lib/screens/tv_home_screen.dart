@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show unawaited;
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import '../services/pairing_service.dart';
+import '../widgets/group_animation_overlay.dart';
 
 class TvHomeScreen extends StatefulWidget {
   const TvHomeScreen({super.key});
@@ -30,6 +31,7 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
   bool _navVisible = true;
   Timer? _navHideTimer;
   bool _launchOnBoot = false;
+  GroupAnimationCue? _animationCue;
 
   void _scheduleNavHide() {
     _navHideTimer?.cancel();
@@ -120,6 +122,10 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     _pairingSub?.cancel();
     _pairingSub = _pairingService.watchPairing(code).listen((data) {
       if (!mounted) return;
+      if (data['type'] == 'group_animation') {
+        setState(() => _animationCue = GroupAnimationCue.fromJson(data));
+        return;
+      }
       if (data['status'] == 'removed') {
         _disconnect();
         return;
@@ -331,10 +337,28 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     if (_connectedCode == null) {
       return const Center(child: Text('Pair this TV with a phone to receive ads.'));
     }
-    if (_playlist.isEmpty) {
-      return const Center(child: Text('No ads have been sent to this TV yet.'));
-    }
-    final content = _PlaylistDisplay(playlist: _playlist);
+    Widget content = _playlist.isEmpty
+        ? const Center(child: Text('No ads have been sent to this TV yet.'))
+        : _PlaylistDisplay(playlist: _playlist);
+    // The snake needs to sweep left-to-right across what the viewer sees
+    // as this screen, so it rides along inside the same rotated frame as
+    // the ad content rather than sitting on top unrotated.
+    content = Stack(
+      fit: StackFit.expand,
+      children: [
+        content,
+        if (_animationCue != null)
+          GroupAnimationOverlay(
+            key: ValueKey(
+              '${_animationCue!.groupId}-${_animationCue!.startAt}',
+            ),
+            cue: _animationCue!,
+            onDone: () {
+              if (mounted) setState(() => _animationCue = null);
+            },
+          ),
+      ],
+    );
     return Container(
       color: Colors.black,
       alignment: Alignment.center,

@@ -485,6 +485,81 @@ class PairingService {
     }
   }
 
+  /// Admin side: every saved TV group, used by the Group Animation section.
+  Future<List<TvGroup>> fetchGroups() async {
+    final res = await http.get(_uri('/api/groups'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list
+        .map((e) => TvGroup.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Admin side: create a group from an ordered list of TV codes (index 0
+  /// is where the snake animation starts).
+  Future<TvGroup> createGroup(String name, List<String> tvCodes) async {
+    final res = await http.post(
+      _uri('/api/groups'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'name': name, 'tv_codes': tvCodes}),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Admin side: rename a group and/or replace its ordered TV list.
+  Future<TvGroup> updateGroup(
+    String id, {
+    String? name,
+    List<String>? tvCodes,
+  }) async {
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (tvCodes != null) body['tv_codes'] = tvCodes;
+    final res = await http.patch(
+      _uri('/api/groups/$id'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<void> deleteGroup(String id) async {
+    final res = await http.delete(_uri('/api/groups/$id'));
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+  }
+
+  /// Admin side: starts the snake/wave group animation across every
+  /// connected TV in the group's order. [durationPerScreenSeconds] is how
+  /// long the snake takes to cross one screen before continuing onto the
+  /// next.
+  Future<void> playGroupAnimation(
+    String id, {
+    double durationPerScreenSeconds = 1.5,
+    String color = '#22C55E',
+  }) async {
+    final res = await http.post(
+      _uri('/api/groups/$id/play'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'duration_per_screen_ms': (durationPerScreenSeconds * 1000).round(),
+        'color': color,
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+  }
+
   String _errorMessage(http.Response res) {
     try {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -593,4 +668,24 @@ class ServiceAd {
   final List<String>? targetTvCodes;
 
   bool get appliesToAllTvs => targetTvCodes == null || targetTvCodes!.isEmpty;
+}
+
+/// An ordered set of TVs used for the Group Animation feature: a
+/// snake/wave that starts on `tvCodes[0]` and travels through the rest of
+/// the list in order, appearing to move continuously from one physical
+/// screen to the next.
+class TvGroup {
+  const TvGroup({required this.id, required this.name, required this.tvCodes});
+
+  factory TvGroup.fromJson(Map<String, dynamic> json) => TvGroup(
+        id: json['id'] as String,
+        name: json['name'] as String? ?? '',
+        tvCodes: (json['tvCodes'] as List<dynamic>? ?? [])
+            .map((e) => e.toString())
+            .toList(),
+      );
+
+  final String id;
+  final String name;
+  final List<String> tvCodes;
 }
