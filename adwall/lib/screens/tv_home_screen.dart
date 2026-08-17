@@ -349,16 +349,10 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
         content,
         if (_animationCue != null)
           GroupAnimationOverlay(
-            key: ValueKey('${_animationCue!.groupId}-${_animationCue!.index}'),
+            key: ValueKey('${_animationCue!.groupId}-${_animationCue!.startAt}'),
             cue: _animationCue!,
             resolvedMediaUrl:
                 _pairingService.resolveMediaUrl(_animationCue!.mediaUrl),
-            onDone: () {
-              final cue = _animationCue;
-              if (cue == null) return;
-              if (mounted) setState(() => _animationCue = null);
-              _pairingService.reportGroupAnimationFinished(cue.groupId, cue.index);
-            },
           ),
       ],
     );

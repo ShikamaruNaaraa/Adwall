@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { playGroupAnimation, ensureHydrated } from "../../../../../lib/store";
 
-// POST /api/groups/{id}/play - starts the group animation: sends the
-// group's attached media to the first connected TV in its order. Later TVs
-// pick it up one at a time as each prior one finishes (see
-// /api/groups/{id}/advance and playGroupAnimation in lib/store.js).
+// POST /api/groups/{id}/play - broadcasts the group's video + a shared
+// start timestamp to every connected TV in the group at once, so they play
+// their own slice of the frame roughly in sync (see playGroupAnimation in
+// lib/store.js).
 export async function POST(_request, { params }) {
   await ensureHydrated();
   const { id } = await params;

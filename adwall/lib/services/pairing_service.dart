@@ -558,10 +558,9 @@ class PairingService {
     }
   }
 
-  /// Admin side: starts the group animation - sends the group's attached
-  /// media to the first connected TV in its order. Later TVs pick it up
-  /// one at a time as each prior one finishes playing (handled entirely by
-  /// the backend + TV apps; nothing further to call from here).
+  /// Admin side: starts the group animation - broadcasts the group's video
+  /// to every connected TV in the group at once (see PlayGroupAnimation in
+  /// lib/store.js on the backend), each rendering its own slice.
   Future<void> playGroupAnimation(String id) async {
     final res = await http.post(_uri('/api/groups/$id/play'));
     if (res.statusCode != 200) {
@@ -569,20 +568,14 @@ class PairingService {
     }
   }
 
-  /// Admin side: upload (or replace) the one media file - image or video -
-  /// that this group's animation hands off across its TVs, in order.
-  /// [durationSeconds] only matters for images; videos play to their own
-  /// natural end on the TV.
+  /// Admin side: upload (or replace) the one video that plays stretched
+  /// across this group's TVs, split into equal vertical slices.
   Future<TvGroup> uploadGroupAnimation(
     String id, {
     required String filePath,
     required String fileName,
-    int? durationSeconds,
   }) async {
     final req = http.MultipartRequest('POST', _uri('/api/groups/$id/animation'));
-    if (durationSeconds != null) {
-      req.fields['duration_seconds'] = durationSeconds.toString();
-    }
     req.files.add(await http.MultipartFile.fromPath(
       'file',
       filePath,
@@ -596,47 +589,6 @@ class PairingService {
     return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
-  /// Admin side: set (or clear, by passing an empty [text]) the text
-  /// overlay that hands off across this group's TVs the same way the
-  /// media does.
-  Future<TvGroup> setGroupAnimationText(
-    String id, {
-    required String text,
-    required String color,
-    required double size,
-    required String position,
-  }) async {
-    final res = await http.patch(
-      _uri('/api/groups/$id/text'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'text': text,
-        'color': color,
-        'size': size,
-        'position': position,
-      }),
-    );
-    if (res.statusCode != 200) {
-      throw PairingException(_errorMessage(res));
-    }
-    return TvGroup.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
-  }
-
-  /// TV side: reports that this TV finished playing the group animation at
-  /// [index] (its position in the group's order), so the backend can hand
-  /// off to the next TV in the list.
-  Future<void> reportGroupAnimationFinished(String groupId, int index) async {
-    try {
-      await http.post(
-        _uri('/api/groups/$groupId/advance'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'index': index}),
-      );
-    } catch (_) {
-      // Best-effort - if this fails the sequence just stops early, which
-      // is not worth surfacing an error for on the TV screen.
-    }
-  }
 
   String _errorMessage(http.Response res) {
     try {
@@ -749,10 +701,10 @@ class ServiceAd {
 }
 
 /// An ordered set of TVs used for the Group Animation feature: the admin
-/// attaches one media file (image or video) to the group, and playing it
-/// shows that media on `tvCodes[0]` first, then hands off to the next TV
-/// in the list the moment the previous one finishes, and so on down the
-/// order.
+/// attaches one video to the group, and playing it broadcasts that video
+/// to every connected TV in `tvCodes` at once, each rendering only its own
+/// equal vertical slice (stretched to fill its screen) so the TVs together
+/// form one continuous wide video.
 class TvGroup {
   const TvGroup({
     required this.id,
@@ -760,11 +712,6 @@ class TvGroup {
     required this.tvCodes,
     this.animationMediaUrl,
     this.animationMediaType,
-    this.animationDurationSeconds = 8,
-    this.animationText,
-    this.animationTextColor = '#FFFFFF',
-    this.animationTextSize = 48,
-    this.animationTextPosition = 'center',
   });
 
   factory TvGroup.fromJson(Map<String, dynamic> json) => TvGroup(
@@ -775,43 +722,19 @@ class TvGroup {
             .toList(),
         animationMediaUrl: json['animationMediaUrl'] as String?,
         animationMediaType: json['animationMediaType'] as String?,
-        animationDurationSeconds:
-            (json['animationDurationSeconds'] as num?)?.toInt() ?? 8,
-        animationText: json['animationText'] as String?,
-        animationTextColor: json['animationTextColor'] as String? ?? '#FFFFFF',
-        animationTextSize: (json['animationTextSize'] as num?)?.toDouble() ?? 48,
-        animationTextPosition: json['animationTextPosition'] as String? ?? 'center',
       );
 
   final String id;
   final String name;
   final List<String> tvCodes;
 
-  /// Relative media path (e.g. '/media/abc.mp4') for the group's animation,
+  /// Relative media path (e.g. '/media/abc.mp4') for the group's video,
   /// or null if none has been added yet.
   final String? animationMediaUrl;
 
-  /// 'image' or 'video'.
+  /// Always 'video'.
   final String? animationMediaType;
 
-  /// Only used when [animationMediaType] is 'image' - videos play to their
-  /// own natural end instead.
-  final int animationDurationSeconds;
-
-  /// Text overlay that slides across the group's TVs the same way the
-  /// media does - null/empty means no text overlay is configured.
-  final String? animationText;
-
-  /// Hex color (e.g. '#FFFFFF') for [animationText].
-  final String animationTextColor;
-
-  /// Font size for [animationText].
-  final double animationTextSize;
-
-  /// Where [animationText] sits on screen: 'top' | 'center' | 'bottom'.
-  final String animationTextPosition;
-
   bool get hasMedia => animationMediaUrl != null && animationMediaUrl!.isNotEmpty;
-  bool get hasText => animationText != null && animationText!.trim().isNotEmpty;
-  bool get hasAnimation => hasMedia || hasText;
+  bool get hasAnimation => hasMedia;
 }

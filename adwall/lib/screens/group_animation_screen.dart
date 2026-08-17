@@ -3,11 +3,10 @@ import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
 
 /// Admin "Group Animation" section: pick a set of TVs, arrange the order
-/// they should light up in, attach one animation (an image or video the
-/// admin uploads), then Play to show it on the first TV. The moment that
-/// TV finishes playing it, it hands off to the next TV in the order, and
-/// so on down the list - so only one screen is ever playing the animation
-/// at a time.
+/// they sit in left to right, attach one video, then Play to broadcast it
+/// to every TV in the group at once. Each TV shows only its own vertical
+/// slice of the frame, stretched to fill its screen, so the lined-up TVs
+/// together display one continuous wide video.
 class GroupAnimationScreen extends StatefulWidget {
   const GroupAnimationScreen({super.key, required this.pairingService});
 
@@ -144,56 +143,16 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
     }
   }
 
-  /// Lets the admin pick an image or video from this device and upload it
-  /// as the group's animation. Videos play to their own end on the TV;
-  /// for images, ask for how many seconds to show it.
+  /// Lets the admin pick a video from this device and upload it as the
+  /// group's animation - it plays stretched across the group's TVs, split
+  /// into equal vertical slices.
   Future<void> _addAnimation(TvGroup group) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'mov', 'webm', 'mkv'],
+      allowedExtensions: ['mp4', 'mov', 'webm', 'mkv'],
     );
     if (result.isEmpty || result.first.path == null) return;
     final file = result.first;
-    final isVideo = ['.mp4', '.mov', '.webm', '.mkv']
-        .any((ext) => file.name.toLowerCase().endsWith(ext));
-
-    int? durationSeconds;
-    if (!isVideo) {
-      durationSeconds = await showDialog<int>(
-        context: context,
-        builder: (context) {
-          final controller = TextEditingController(
-            text: (group.animationDurationSeconds).toString(),
-          );
-          return AlertDialog(
-            title: const Text('How long should it show?'),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Duration (seconds)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final value = int.tryParse(controller.text);
-                  Navigator.pop(context, (value == null || value < 1) ? 8 : value);
-                },
-                child: const Text('Continue'),
-              ),
-            ],
-          );
-        },
-      );
-      if (durationSeconds == null) return;
-    }
 
     setState(() {
       _uploadingGroupId = group.id;
@@ -204,140 +163,12 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
         group.id,
         filePath: file.path!,
         fileName: file.name,
-        durationSeconds: durationSeconds,
       );
       await _refresh();
     } catch (e) {
       if (mounted) setState(() => _error = 'Failed to add animation: $e');
     } finally {
       if (mounted) setState(() => _uploadingGroupId = null);
-    }
-  }
-
-  /// Lets the admin set (or clear) the text overlay that hands off across
-  /// this group's TVs the same way the media animation does.
-  Future<void> _editText(TvGroup group) async {
-    final textController = TextEditingController(text: group.animationText ?? '');
-    final sizeController =
-        TextEditingController(text: group.animationTextSize.toStringAsFixed(0));
-    var color = group.animationTextColor;
-    var position = group.animationTextPosition;
-    const colorChoices = <String>[
-      '#FFFFFF',
-      '#000000',
-      '#FF3B30',
-      '#FFCC00',
-      '#34C759',
-      '#0A84FF',
-    ];
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Group text overlay'),
-          content: SizedBox(
-            width: 380,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: textController,
-                  autofocus: true,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Text',
-                    hintText: 'e.g. Grand opening!',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: sizeController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Font size',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  initialValue: position,
-                  decoration: const InputDecoration(
-                    labelText: 'Position',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'top', child: Text('Top')),
-                    DropdownMenuItem(value: 'center', child: Text('Center')),
-                    DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setDialogState(() => position = value);
-                  },
-                ),
-                const SizedBox(height: 16),
-                const Text('Color', style: TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 10,
-                  children: [
-                    for (final choice in colorChoices)
-                      GestureDetector(
-                        onTap: () => setDialogState(() => color = choice),
-                        child: Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: Color(
-                              int.parse('FF${choice.replaceFirst('#', '')}', radix: 16),
-                            ),
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: color == choice
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.grey.shade400,
-                              width: color == choice ? 3 : 1,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (saved != true) return;
-
-    final size = double.tryParse(sizeController.text) ?? group.animationTextSize;
-    try {
-      await widget.pairingService.setGroupAnimationText(
-        group.id,
-        text: textController.text.trim(),
-        color: color,
-        size: size,
-        position: position,
-      );
-      await _refresh();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed to save text: $e')));
-      }
     }
   }
 
@@ -397,10 +228,10 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          'Arrange TVs in order, add an animation (image or '
-                          'video), then Play. It shows on the first TV, and '
-                          'the moment that TV finishes, the next TV in the '
-                          'order starts - one screen at a time, in sequence.',
+                          'Arrange TVs left to right, attach one video, then '
+                          'Play. It plays stretched across every TV at once - '
+                          'each TV shows its own slice of the frame, so lined-'
+                          'up TVs form one continuous wide video.',
                         ),
                       ),
                     ],
@@ -532,35 +363,6 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
                                 label: Text(
                                   group.hasMedia ? 'Replace' : 'Add animation',
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Icon(
-                                group.hasText
-                                    ? Icons.text_fields
-                                    : Icons.text_fields_outlined,
-                                size: 18,
-                                color: group.hasText ? null : Colors.grey,
-                              ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  group.hasText
-                                      ? "Text: '${group.animationText}'"
-                                      : 'No text overlay set',
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: group.hasText ? null : Colors.grey,
-                                  ),
-                                ),
-                              ),
-                              TextButton.icon(
-                                onPressed: () => _editText(group),
-                                icon: const Icon(Icons.edit_outlined, size: 18),
-                                label: Text(group.hasText ? 'Edit text' : 'Add text'),
                               ),
                             ],
                           ),
