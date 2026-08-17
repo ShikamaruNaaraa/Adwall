@@ -14,12 +14,14 @@ export async function POST(request, { params }) {
   await ensureHydrated();
   const { code } = await params;
 
+  const form = await request.formData();
+  const adminUsername = (form.get("admin_username") || "").toString().trim() || null;
+
   const entry = getEntry(code);
-  if (!entry) {
+  if (!entry || (entry.adminUsername || null) !== adminUsername) {
     return NextResponse.json({ detail: "Unknown or expired code" }, { status: 404 });
   }
 
-  const form = await request.formData();
   const file = form.get("file");
   const durationSeconds = Number(form.get("duration_seconds") ?? 10);
   if (!file || typeof file === "string") {

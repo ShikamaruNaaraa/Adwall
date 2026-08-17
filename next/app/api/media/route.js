@@ -21,6 +21,7 @@ export async function POST(request) {
   const file = form.get("file");
   const durationSeconds = Number(form.get("duration_seconds") ?? 10);
   const codesRaw = form.get("codes");
+  const adminUsername = (form.get("admin_username") || "").toString().trim() || null;
 
   if (!file || typeof file === "string") {
     return NextResponse.json({ detail: "file is required" }, { status: 400 });
@@ -46,13 +47,18 @@ export async function POST(request) {
   }
 
   const targets = codes.map((code) => ({ code, entry: getEntry(code) }));
-  const missing = targets.filter((t) => !t.entry).map((t) => t.code);
+  // Missing or not-owned-by-this-admin codes are treated the same way, so a
+  // caller can't distinguish "unknown code" from "someone else's TV".
+  const missing = targets
+    .filter((t) => !t.entry || (t.entry.adminUsername || null) !== adminUsername)
+    .map((t) => t.code);
   if (missing.length > 0) {
     return NextResponse.json(
       { detail: `Unknown or expired code(s): ${missing.join(", ")}` },
       { status: 404 }
     );
   }
+
 
   await mkdir(MEDIA_DIR, { recursive: true });
   const safeName = `ad-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.name)}`;
