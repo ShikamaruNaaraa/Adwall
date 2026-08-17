@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show unawaited;
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import '../services/pairing_service.dart';
@@ -29,6 +30,7 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
   StreamSubscription<Map<String, dynamic>>? _pairingSub;
   bool _navVisible = true;
   Timer? _navHideTimer;
+  bool _launchOnBoot = false;
   GroupAnimationCue? _animationCue;
 
   void _scheduleNavHide() {
@@ -98,8 +100,15 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
   }
 
   Future<void> _disconnect() async {
+    final code = _connectedCode;
     await _pairingService.clearPairing();
     await _pairingSub?.cancel();
+    if (code != null) {
+      // Best-effort: tell the backend so the admin app shows this TV as
+      // disconnected. If it fails (offline, TV already removed) the TV
+      // still forgets its own pairing locally either way.
+      unawaited(_pairingService.disconnectTv(code).catchError((_) {}));
+    }
     if (!mounted) return;
     setState(() {
       _connectedNickname = null;
@@ -145,6 +154,17 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     _loadSavedPairing();
+    _loadLaunchOnBoot();
+  }
+
+  Future<void> _loadLaunchOnBoot() async {
+    final enabled = await _pairingService.getLaunchOnBoot();
+    if (mounted) setState(() => _launchOnBoot = enabled);
+  }
+
+  Future<void> _toggleLaunchOnBoot(bool enabled) async {
+    setState(() => _launchOnBoot = enabled);
+    await _pairingService.setLaunchOnBoot(enabled);
   }
 
   bool _handleKeyEvent(KeyEvent event) {
@@ -244,7 +264,18 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
           icon: const Icon(Icons.link_off),
           label: const Text('Disconnect'),
         ),
+        const SizedBox(height: 28),
+        _buildLaunchOnBootToggle(),
       ],
+    );
+  }
+
+  Widget _buildLaunchOnBootToggle() {
+    return SwitchListTile(
+      value: _launchOnBoot,
+      onChanged: _toggleLaunchOnBoot,
+      title: const Text('Start app on TV startup'),
+      subtitle: const Text('Automatically opens this app when the TV turns on'),
     );
   }
 
@@ -295,6 +326,8 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
             const SizedBox(height: 12),
             Text(_error!, style: const TextStyle(color: Colors.red)),
           ],
+          const SizedBox(height: 28),
+          _buildLaunchOnBootToggle(),
         ],
       ),
     );

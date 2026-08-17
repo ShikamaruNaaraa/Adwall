@@ -118,10 +118,23 @@ export function claimCode(code, tvDeviceId) {
   if (!entry) return null;
   entry.status = "paired";
   entry.tvDeviceId = tvDeviceId;
+  entry.disconnected = false;
   notify(entry);
   recordCodeClaimed(code, tvDeviceId).catch(() => {});
   return entry;
 }
+
+// Marks a paired TV as disconnected without unpairing it (used when the TV
+// app's own "Disconnect" button is pressed). The code/pairing stays valid
+// so the admin can still manage it, but the admin list should show it as
+// disconnected rather than connected.
+export function markDisconnected(code) {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  entry.disconnected = true;
+  return entry;
+}
+
 
 export function setPlaylist(code, playlist) {
   const entry = codes.get(code);
@@ -146,6 +159,18 @@ export function updatePlaylistItem(code, index, { durationSeconds }) {
   if (durationSeconds !== undefined) {
     item.durationSeconds = Math.max(1, Number(durationSeconds) || 1);
   }
+  notify(entry);
+  recordPlaylistUpdated(code, entry.playlist).catch(() => {});
+  return entry.playlist;
+}
+
+// Removes a single ad already on a TV's playlist (identified by its
+// position) without re-uploading it.
+export function removePlaylistItem(code, index) {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  if (!entry.playlist[index]) return null;
+  entry.playlist.splice(index, 1);
   notify(entry);
   recordPlaylistUpdated(code, entry.playlist).catch(() => {});
   return entry.playlist;
@@ -186,7 +211,7 @@ export function listAllTvs() {
     status: e.status,
     adminUsername: e.adminUsername || null,
     orientation: e.orientation || "landscape",
-    connected: e.subscribers.size > 0,
+    connected: e.status === "paired" && !e.disconnected,
     playlist: getEffectivePlaylist(e),
   }));
 }
