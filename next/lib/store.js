@@ -18,14 +18,15 @@ if (!process.env.DATABASE_URL) {
   );
 }
 // code -> { code, nickname, status: 'pending' | 'paired', tvDeviceId,
-//           mediaType, mediaUrl, subscribers: Set<controller> }
+//           playlist: [{ mediaType, mediaUrl, durationSeconds }],
+//           subscribers: Set<controller> }
 //
 // Stored on globalThis rather than as a plain module-scope variable: in
 // Next.js dev mode each API route can be compiled/HMR-reloaded as its own
 // bundle, which would otherwise give every route its own empty Map instead
 // of sharing one across requests.
-const codes = globalThis.__adwallCodes ?? (globalThis.__adwallCodes = new Map());
-
+const codes = globalThis.__adwallPairingCodes ?? new Map();
+globalThis.__adwallPairingCodes = codes;
 
 function generateCode() {
   let code;
@@ -42,8 +43,7 @@ export function createPairingCode(nickname) {
     nickname,
     status: "pending",
     tvDeviceId: null,
-    mediaType: null,
-    mediaUrl: null,
+    playlist: [],
     subscribers: new Set(),
   });
   // Best-effort, fire-and-forget: don't block/await, and never let a DB
@@ -66,13 +66,25 @@ export function claimCode(code, tvDeviceId) {
   return entry;
 }
 
-export function setMedia(code, { mediaType, mediaUrl }) {
+export function setPlaylist(code, playlist) {
   const entry = codes.get(code);
   if (!entry) return null;
-  entry.mediaType = mediaType;
-  entry.mediaUrl = mediaUrl;
+  entry.playlist = playlist.map((item) => ({
+    mediaType: item.mediaType,
+    mediaUrl: item.mediaUrl,
+    durationSeconds: Math.max(1, Number(item.durationSeconds) || 1),
+  }));
   notify(entry);
   return entry;
+}
+
+export function clearPlaylist(code) {
+  return setPlaylist(code, []);
+}
+
+export function getPlaylist(code) {
+  const entry = codes.get(code);
+  return entry ? entry.playlist : null;
 }
 
 export function listPairedTvs() {
@@ -85,11 +97,9 @@ function publicView(entry) {
   return {
     status: entry.status,
     nickname: entry.nickname,
-    media_type: entry.mediaType,
-    media_url: entry.mediaUrl,
+    playlist: entry.playlist,
   };
 }
-
 function notify(entry) {
   const payload = `data: ${JSON.stringify(publicView(entry))}\n\n`;
   for (const controller of entry.subscribers) {

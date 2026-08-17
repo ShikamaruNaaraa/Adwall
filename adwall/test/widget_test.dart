@@ -10,13 +10,13 @@ void main() {
     dotenv.testLoad(fileInput: 'API_BASE_URL=http://localhost:8000');
   });
 
-  testWidgets('Admin home screen shows the Add TV button', (tester) async {
-
+  testWidgets('Admin home screen shows navigation destinations', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(home: AdminHomeScreen()),
     );
 
+    expect(find.text('Home'), findsNWidgets(2));
     expect(find.text('Add TV'), findsOneWidget);
-    expect(find.text('TV nickname'), findsOneWidget);
+    expect(find.byIcon(Icons.add), findsOneWidget);
   });
 }
