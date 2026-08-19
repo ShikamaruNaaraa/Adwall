@@ -1,5 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:video_player/video_player.dart';
 import '../services/pairing_service.dart';
 
 /// Turns a raw exception into a short, non-technical message for the UI.
@@ -129,6 +131,8 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   int _defaultDuration = 10;
   late Future<List<TvSummary>> _tvsFuture;
   bool _gridView = false;
+  bool _selectionMode = false;
+  final Set<int> _selectedIndices = {};
 
   @override
   void initState() {
@@ -434,34 +438,50 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     if (confirmed == true) _removeItem(index);
   }
 
-  /// Shows the rename/edit-duration options for one grid item, triggered by
-  /// a long-press on its thumbnail so it doesn't clash with drag-to-reorder.
-  Future<void> _showImageOptions(int index) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.drive_file_rename_outline),
-              title: const Text('Rename'),
-              onTap: () {
-                Navigator.pop(context);
-                _editItemName(index);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.timer_outlined),
-              title: const Text('Edit duration'),
-              onTap: () {
-                Navigator.pop(context);
-                _editItemDuration(index);
-              },
-            ),
-          ],
+  /// The 3-dot menu shown on every ad card (grid and list view): Rename,
+  /// Edit duration, and Delete, all in one place instead of a long-press
+  /// bottom sheet.
+  Widget _itemMenuButton(int index) {
+    return PopupMenuButton<String>(
+      tooltip: 'More options',
+      icon: const Icon(Icons.more_vert),
+      onSelected: (value) {
+        switch (value) {
+          case 'rename':
+            _editItemName(index);
+            break;
+          case 'duration':
+            _editItemDuration(index);
+            break;
+          case 'delete':
+            _confirmRemoveItem(index);
+            break;
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'rename',
+          child: ListTile(
+            leading: Icon(Icons.drive_file_rename_outline),
+            title: Text('Rename'),
+          ),
         ),
-      ),
+        PopupMenuItem(
+          value: 'duration',
+          child: ListTile(
+            leading: Icon(Icons.timer_outlined),
+            title: Text('Edit duration'),
+          ),
+        ),
+        PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'delete',
+          child: ListTile(
+            leading: Icon(Icons.delete_outline, color: Colors.red),
+            title: Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ),
+      ],
     );
   }
 
@@ -488,6 +508,154 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
           _error = _friendlyError(e);
         });
       }
+    }
+  }
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _selectionMode = !_selectionMode;
+      _selectedIndices.clear();
+    });
+  }
+
+  void _toggleItemSelected(int index) {
+    setState(() {
+      if (_selectedIndices.contains(index)) {
+        _selectedIndices.remove(index);
+      } else {
+        _selectedIndices.add(index);
+      }
+    });
+  }
+
+  /// Opens a full-screen preview of one ad (tap anywhere on its card,
+  /// outside of selection mode). Uses a Hero-driven fade/scale transition
+  /// so the thumbnail grows smoothly into the full-screen preview instead
+  /// of the default hard-cut page swap.
+  void _openAdPreview(int index) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black,
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 260),
+        pageBuilder: (context, animation, secondaryAnimation) => _AdPreviewScreen(
+          item: _playlist[index],
+          pairingService: widget.pairingService,
+          heroTag: 'ad-thumb-$index',
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          // Only fade the page chrome (app bar, background) in. The image
+          // itself is a Hero and already animates its own position/size -
+          // scaling the whole page on top of that fought the Hero's motion
+          // and made the image look like it was jumping/colliding into
+          // place instead of gliding smoothly.
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+
+  /// Applies one duration to every selected ad, one backend call per ad
+  /// (there's no bulk endpoint), then exits selection mode on success.
+  Future<void> _setDurationForSelected() async {
+    if (_selectedIndices.isEmpty) return;
+    final controller = TextEditingController(text: _defaultDuration.toString());
+    final value = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Duration for ${_selectedIndices.length} selected ad(s)'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Seconds'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final seconds = int.tryParse(controller.text);
+              if (seconds != null && seconds >= 1) Navigator.pop(context, seconds);
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (value == null || !mounted) return;
+
+    final indices = _selectedIndices.toList()..sort();
+    try {
+      List<PlaylistItem> updated = _playlist;
+      for (final index in indices) {
+        updated = await widget.pairingService.updatePlaylistItemDuration(
+          widget.tv.code,
+          index: index,
+          durationSeconds: value,
+        );
+      }
+      if (mounted) {
+        setState(() {
+          _playlist = updated;
+          _selectionMode = false;
+          _selectedIndices.clear();
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = _friendlyError(e));
+    }
+  }
+
+  Future<void> _confirmDeleteSelected() async {
+    if (_selectedIndices.isEmpty) return;
+    final count = _selectedIndices.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete selected ads?'),
+        content: Text('$count ad(s) will be removed from this TV.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await _deleteSelected();
+  }
+
+  /// Removes every selected ad, highest index first so earlier removals
+  /// never shift the position of an ad still waiting to be deleted.
+  Future<void> _deleteSelected() async {
+    final indices = _selectedIndices.toList()..sort((a, b) => b.compareTo(a));
+    try {
+      List<PlaylistItem> updated = _playlist;
+      for (final index in indices) {
+        updated = await widget.pairingService.removePlaylistItem(
+          widget.tv.code,
+          index: index,
+        );
+      }
+      if (mounted) {
+        setState(() {
+          _playlist = updated;
+          _selectionMode = false;
+          _selectedIndices.clear();
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = _friendlyError(e));
     }
   }
 
@@ -571,33 +739,60 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(child: Text('${_playlist.length} ad(s)')),
-                IconButton(
-                  tooltip: _gridView ? 'List view' : 'Grid view',
-                  icon: Icon(_gridView ? Icons.view_list : Icons.grid_view),
-                  onPressed: () => setState(() => _gridView = !_gridView),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _setDurationForAll,
-                  icon: const Icon(Icons.timer),
-                  label: const Text('Same time for all'),
-                ),
-
-              ],
-            ),
+            if (!_selectionMode)
+              Row(
+                children: [
+                  const Spacer(),
+                  IconButton(
+                    tooltip: _gridView ? 'List view' : 'Grid view',
+                    icon: Icon(_gridView ? Icons.view_list : Icons.grid_view),
+                    onPressed: () => setState(() => _gridView = !_gridView),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _setDurationForAll,
+                    icon: const Icon(Icons.timer),
+                    label: const Text('Same time for all'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _playlist.isEmpty ? null : _toggleSelectionMode,
+                    icon: const Icon(Icons.checklist),
+                    label: const Text('Select'),
+                  ),
+                ],
+              )
+            else
+              Row(
+                children: [
+                  Expanded(child: Text('${_selectedIndices.length} selected')),
+                  IconButton(
+                    tooltip: 'Set duration for selected',
+                    icon: const Icon(Icons.timer),
+                    onPressed: _selectedIndices.isEmpty ? null : _setDurationForSelected,
+                  ),
+                  IconButton(
+                    tooltip: 'Delete selected',
+                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    onPressed: _selectedIndices.isEmpty ? null : _confirmDeleteSelected,
+                  ),
+                  TextButton(
+                    onPressed: _toggleSelectionMode,
+                    child: const Text('Done'),
+                  ),
+                ],
+              ),
             const SizedBox(height: 12),
             Expanded(
               child: _playlist.isEmpty
                   ? const Center(child: Text('No ads added yet.'))
                   : (_gridView ? _buildGrid() : _buildList()),
             ),
-            FilledButton.icon(
-              onPressed: _uploading ? null : _pickAndSend,
-              icon: const Icon(Icons.add_photo_alternate),
-              label: Text(_uploading ? 'Uploading...' : 'Add images'),
-            ),
+            if (!_selectionMode)
+              FilledButton.icon(
+                onPressed: _uploading ? null : _pickAndSend,
+                icon: const Icon(Icons.add_photo_alternate),
+                label: Text(_uploading ? 'Uploading...' : 'Add images'),
+              ),
             if (_error != null) ...[
               const SizedBox(height: 12),
               Text(_error!, style: const TextStyle(color: Colors.red)),
@@ -628,33 +823,88 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   }
 
   Widget _buildList() {
+    return _selectionMode ? _buildSelectableList() : _buildReorderableList();
+  }
+
+  /// Ordinary mode: press-and-hold anywhere on a row to drag it to a new
+  /// position (no separate drag handle needed).
+  Widget _buildReorderableList() {
+    return ReorderableListView.builder(
+      itemCount: _playlist.length,
+      onReorderStart: (_) => HapticFeedback.mediumImpact(),
+      onReorderItem: (index, offset) => _reorderItem(index, index + offset),
+      // Default drag styling paints a tinted background behind the item;
+      // this keeps just a clean elevation/shadow lift instead.
+      proxyDecorator: (child, index, animation) {
+        return AnimatedBuilder(
+          animation: animation,
+          builder: (context, child) {
+            final lift = Curves.easeOut.transform(animation.value);
+            return Material(
+              elevation: 6 * lift,
+              shadowColor: Colors.black45,
+              borderRadius: BorderRadius.circular(8),
+              color: Colors.transparent,
+              child: child,
+            );
+          },
+          child: child,
+        );
+      },
+      itemBuilder: (context, index) {
+        final item = _playlist[index];
+        return Card(
+          key: ValueKey('playlist-item-$index-${item.mediaUrl}'),
+          margin: const EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            onTap: () => _openAdPreview(index),
+            leading: SizedBox(
+              width: 48,
+              height: 48,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Hero(
+                  tag: 'ad-thumb-$index',
+                  child: _thumbnail(item),
+                ),
+              ),
+            ),
+            title: Text(item.displayName),
+            subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
+            trailing: _itemMenuButton(index),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Selection mode: tap anywhere on a row to check/uncheck it.
+  Widget _buildSelectableList() {
     return ListView.separated(
       itemCount: _playlist.length,
       separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final item = _playlist[index];
-        // Touch-and-hold anywhere on the card to rename it or edit its
-        // duration, same as in grid view.
-        return GestureDetector(
-          onLongPress: () => _showImageOptions(index),
-          child: Card(
-            child: ListTile(
-              leading: SizedBox(
-                width: 48,
-                height: 48,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: _thumbnail(item),
+        final selected = _selectedIndices.contains(index);
+        return Card(
+          child: ListTile(
+            onTap: () => _toggleItemSelected(index),
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Checkbox(value: selected, onChanged: (_) => _toggleItemSelected(index)),
+                SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: _thumbnail(item),
+                  ),
                 ),
-              ),
-              title: Text(item.displayName),
-              subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
-              trailing: IconButton(
-                tooltip: 'Remove',
-                icon: const Icon(Icons.remove_circle_outline),
-                onPressed: () => _confirmRemoveItem(index),
-              ),
+              ],
             ),
+            title: Text(item.displayName),
+            subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
           ),
         );
       },
@@ -662,6 +912,12 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   }
 
   Widget _buildGrid() {
+    return _selectionMode ? _buildSelectableGrid() : _buildReorderableGrid();
+  }
+
+  /// Ordinary mode: press-and-hold anywhere on a card to drag it onto
+  /// another card's position (no separate drag handle needed).
+  Widget _buildReorderableGrid() {
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
@@ -672,27 +928,146 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
       itemCount: _playlist.length,
       itemBuilder: (context, index) {
         final item = _playlist[index];
-        // Accepts a dropped item (dragged via the handle below) and moves
+
+        // Builds the card body. [useHero] is false for the drag-feedback
+        // copy below, since two Heroes sharing a tag at once would trip
+        // Flutter's duplicate-hero assertion while dragging.
+        Widget buildCard({required bool useHero}) {
+          final thumbnail = _thumbnail(item);
+          return Card(
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => _openAdPreview(index),
+                    child: useHero
+                        ? Hero(tag: 'ad-thumb-$index', child: thumbnail)
+                        : thumbnail,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        '${item.durationSeconds}s',
+                        style: const TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _itemMenuButton(index),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final cardContent = buildCard(useHero: true);
+
+        // Accepts a dropped card (dragged via long-press below) and moves
         // it to this card's position.
         return DragTarget<int>(
           onWillAcceptWithDetails: (details) => details.data != index,
           onAcceptWithDetails: (details) => _reorderItem(details.data, index),
           builder: (context, candidateData, rejectedData) {
             final isDropTarget = candidateData.isNotEmpty;
-            return Card(
-              clipBehavior: Clip.antiAlias,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: isDropTarget
-                    ? BorderSide(color: Theme.of(context).colorScheme.primary, width: 2)
-                    : BorderSide.none,
+            // Smooth animated lift + highlight instead of an instant snap,
+            // so hovering over a drop target feels like it's welcoming the
+            // card rather than just flipping a border on and off.
+            final animatedCard = AnimatedScale(
+              scale: isDropTarget ? 1.03 : 1.0,
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOut,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                curve: Curves.easeOut,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isDropTarget
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.transparent,
+                    width: 2,
+                  ),
+                ),
+                child: cardContent,
               ),
-              // Touch-and-hold anywhere on the card to rename it or edit
-              // its duration, kept separate from the drag handle below so
-              // reordering and this menu never fight over the same gesture.
-              child: GestureDetector(
-                onLongPress: () => _showImageOptions(index),
-                child: Column(
+            );
+            // Press-and-hold anywhere on the card to start dragging it; a
+            // short tap still reaches the 3-dot menu underneath normally.
+            // Feedback mirrors the real card (not just the thumbnail) so
+            // there's no visual mismatch between what you pick up and what
+            // was actually there. It uses the non-Hero copy since the
+            // resting card's Hero is still mounted underneath it.
+            return LongPressDraggable<int>(
+              data: index,
+              onDragStarted: () => HapticFeedback.mediumImpact(),
+              feedback: Transform.scale(
+                scale: 1.06,
+                child: Material(
+                  color: Colors.transparent,
+                  elevation: 8,
+                  shadowColor: Colors.black54,
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: 160,
+                    height: 160 / 0.85,
+                    child: buildCard(useHero: false),
+                  ),
+                ),
+              ),
+              childWhenDragging: AnimatedOpacity(
+                opacity: 0.35,
+                duration: const Duration(milliseconds: 150),
+                child: Transform.scale(scale: 0.96, child: animatedCard),
+              ),
+              child: animatedCard,
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+  /// Selection mode: tap anywhere on a card to check/uncheck it.
+  Widget _buildSelectableGrid() {
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 16,
+        crossAxisSpacing: 16,
+        childAspectRatio: 0.85,
+      ),
+      itemCount: _playlist.length,
+      itemBuilder: (context, index) {
+        final item = _playlist[index];
+        final selected = _selectedIndices.contains(index);
+        return GestureDetector(
+          onTap: () => _toggleItemSelected(index),
+          child: Card(
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: selected
+                  ? BorderSide(color: Theme.of(context).colorScheme.primary, width: 2)
+                  : BorderSide.none,
+            ),
+            child: Stack(
+              children: [
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(child: _thumbnail(item)),
@@ -714,48 +1089,175 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
                         ],
                       ),
                     ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        // Drag handle: press-and-drag here to reorder. Kept
-                        // separate from the image so it doesn't clash with
-                        // the long-press menu above.
-                        Draggable<int>(
-                          data: index,
-                          feedback: Material(
-                            color: Colors.transparent,
-                            child: SizedBox(
-                              width: 140,
-                              height: 140,
-                              child: Card(
-                                clipBehavior: Clip.antiAlias,
-                                child: _thumbnail(item),
-                              ),
-                            ),
-                          ),
-                          childWhenDragging: const Padding(
-                            padding: EdgeInsets.all(8),
-                            child: Icon(Icons.drag_indicator, color: Colors.black26),
-                          ),
-                          child: const Padding(
-                            padding: EdgeInsets.all(8),
-                            child: Icon(Icons.drag_indicator, color: Colors.black54),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Remove',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _confirmRemoveItem(index),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
+                Positioned(
+                  top: 4,
+                  left: 4,
+                  child: Container(
+                    decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                    child: Checkbox(
+                      value: selected,
+                      onChanged: (_) => _toggleItemSelected(index),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Full-screen preview of a single playlist item (image or video).
+class _AdPreviewScreen extends StatefulWidget {
+  const _AdPreviewScreen({
+    required this.item,
+    required this.pairingService,
+    required this.heroTag,
+  });
+
+  final PlaylistItem item;
+  final PairingService pairingService;
+
+  /// Must match the Hero tag on the thumbnail that was tapped, so the
+  /// image grows smoothly out of the card instead of just cutting to a
+  /// new screen.
+  final Object heroTag;
+
+  @override
+  State<_AdPreviewScreen> createState() => _AdPreviewScreenState();
+}
+
+class _AdPreviewScreenState extends State<_AdPreviewScreen> {
+  VideoPlayerController? _videoController;
+  bool _videoInitError = false;
+
+  bool get _isVideo => widget.item.mediaType == 'video';
+
+  /// The thumbnail grid/list always loads media through this same
+  /// resolver (relative backend paths like '/media/abc.png' aren't
+  /// directly loadable) - the preview needs it too, or the image/video
+  /// silently fails to load.
+  String get _resolvedUrl => widget.pairingService.resolveMediaUrl(widget.item.mediaUrl);
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isVideo) {
+      final controller = VideoPlayerController.networkUrl(Uri.parse(_resolvedUrl));
+      _videoController = controller;
+      controller
+          .initialize()
+          .then((_) {
+            if (mounted) {
+              setState(() {});
+              controller.play();
+              controller.setLooping(true);
+            }
+          })
+          .catchError((_) {
+            if (mounted) setState(() => _videoInitError = true);
+          });
+    }
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: Colors.white,
+        title: Text(widget.item.displayName),
+      ),
+      extendBodyBehindAppBar: true,
+      body: Center(
+        child: Hero(
+          tag: widget.heroTag,
+          // Arcs the image from the thumbnail's position to centered
+          // full-screen, like Material's photo-gallery transitions,
+          // instead of a straight line - reads as far more deliberate.
+          createRectTween: (begin, end) => MaterialRectArcTween(begin: begin, end: end),
+          // Morphs the thumbnail's rounded corners down to square as it
+          // grows, rather than snapping straight to full-bleed - this is
+          // what removes the "pop"/collide feeling at the end of the flight.
+          flightShuttleBuilder: (flightContext, animation, direction, fromContext, toContext) {
+            final radius = Tween<double>(begin: 8, end: 0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            );
+            final destinationChild = (toContext.widget as Hero).child;
+            return AnimatedBuilder(
+              animation: radius,
+              child: destinationChild,
+              builder: (context, child) => ClipRRect(
+                borderRadius: BorderRadius.circular(radius.value),
+                child: child,
               ),
             );
           },
-        );
-      },
+          child: _isVideo ? _buildVideoPreview() : _buildImagePreview(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImagePreview() {
+    return InteractiveViewer(
+      child: Image.network(
+        _resolvedUrl,
+        fit: BoxFit.contain,
+        // Cross-fades the image in once it's actually decoded, instead of
+        // popping in abruptly once the last byte arrives.
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded) return child;
+          return AnimatedOpacity(
+            opacity: frame == null ? 0 : 1,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+            child: child,
+          );
+        },
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white54),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) => const Icon(
+          Icons.broken_image_outlined,
+          color: Colors.white54,
+          size: 64,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoPreview() {
+    if (_videoInitError) {
+      return const Icon(Icons.error_outline, color: Colors.white54, size: 64);
+    }
+    final controller = _videoController;
+    if (controller == null || !controller.value.isInitialized) {
+      return const CircularProgressIndicator(color: Colors.white54);
+    }
+    return AnimatedOpacity(
+      opacity: 1,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+      child: AspectRatio(
+        aspectRatio: controller.value.aspectRatio,
+        child: VideoPlayer(controller),
+      ),
     );
   }
 }

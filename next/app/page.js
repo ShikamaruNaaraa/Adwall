@@ -93,6 +93,81 @@ function SecondaryButton({ children, ...props }) {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V7h10ZM10 11v6M14 11v6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// In-app confirmation modal (replaces the browser's native window.confirm,
+// which looks jarring next to the rest of the dashboard's styling). Renders
+// a dimmed backdrop plus a centered card; clicking the backdrop cancels.
+function ConfirmDialog({ title, message, confirmLabel = "Delete", cancelLabel = "Cancel", busy, onConfirm, onCancel }) {
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: theme.white,
+          borderRadius: 12,
+          border: `1px solid ${theme.blueBorder}`,
+          boxShadow: "0 12px 32px rgba(15, 23, 42, 0.25)",
+          padding: 24,
+          width: "100%",
+          maxWidth: 380,
+        }}
+      >
+        <h3 style={{ margin: "0 0 8px", fontSize: 17, color: theme.text }}>{title}</h3>
+        <p style={{ margin: "0 0 20px", fontSize: 14, color: theme.textMuted, lineHeight: 1.5 }}>
+          {message}
+        </p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <SecondaryButton onClick={onCancel} disabled={busy}>
+            {cancelLabel}
+          </SecondaryButton>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            style={{
+              padding: "8px 16px",
+              fontSize: 13,
+              fontWeight: 600,
+              borderRadius: 8,
+              border: "none",
+              background: busy ? "#e19b90" : theme.danger,
+              color: theme.white,
+              cursor: busy ? "default" : "pointer",
+            }}
+          >
+            {busy ? "Deleting..." : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function Chevron({ open }) {
   return (
     <svg
@@ -227,39 +302,80 @@ function TvRow({ tv, expanded, onToggle }) {
 }
 
 // One admin's row in the accordion. Click the admin to sweep down their list
-// of TVs; click a TV to sweep down its ads.
-function AdminRow({ admin, expanded, onToggle, expandedTv, onToggleTv }) {
+// of TVs; click a TV to sweep down its ads. The trash icon asks the parent
+// to open an in-app confirmation dialog before deleting the admin.
+function AdminRow({ admin, expanded, onToggle, expandedTv, onToggleTv, onRequestDelete, deleting }) {
+  function handleDelete(e) {
+    e.stopPropagation();
+    onRequestDelete(admin);
+  }
+
   return (
     <Card style={{ marginTop: 12, overflow: "hidden" }}>
-      <button
-        onClick={onToggle}
+      <div
         style={{
           display: "flex",
-          width: "100%",
-          justifyContent: "space-between",
+          width: "98%",
           alignItems: "center",
-          flexWrap: "wrap",
-          gap: 10,
-          padding: 16,
-          border: "none",
-          background: "transparent",
-          cursor: "pointer",
-          textAlign: "left",
+          gap: 8,
+          padding: "0 28px 0 0",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <Chevron open={expanded} />
-          <h3 style={{ margin: 0, fontSize: 16, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{admin.username}</h3>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          {admin.mustChangePassword && (
-            <span style={{ fontSize: 12, color: "#b7791f" }}>Password not yet changed</span>
-          )}
-          <span style={{ fontSize: 12, color: theme.textMuted }}>
-            {admin.tvs.length} TV{admin.tvs.length === 1 ? "" : "s"}
-          </span>
-        </div>
-      </button>
+        <button
+          onClick={onToggle}
+          style={{
+            display: "flex",
+            flex: 1,
+            minWidth: 0,
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 10,
+            padding: 16,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <Chevron open={expanded} />
+            <h3 style={{ margin: 0, fontSize: 16, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{admin.username}</h3>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {admin.mustChangePassword && (
+              <span style={{ fontSize: 12, color: "#b7791f" }}>Password not yet changed</span>
+            )}
+            <span style={{ fontSize: 12, color: theme.textMuted }}>
+              {admin.tvs.length} TV{admin.tvs.length === 1 ? "" : "s"}
+            </span>
+          </div>
+        </button>
+
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          aria-label={`Delete admin ${admin.username}`}
+          title="Delete admin"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            marginLeft: 12,
+            width: 34,
+            height: 34,
+            padding: 0,
+            borderRadius: 8,
+            border: `1px solid ${theme.blueBorder}`,
+            background: theme.white,
+            color: deleting ? theme.textMuted : theme.danger,
+            cursor: deleting ? "default" : "pointer",
+          }}
+        >
+          <TrashIcon />
+        </button>
+      </div>
 
       {expanded && (
         <div style={{ padding: "0 16px 16px" }}>
@@ -575,6 +691,8 @@ function OverviewPanel({ authHeaders, onLogout, reloadToken }) {
   const [query, setQuery] = useState("");
   const [expandedAdmin, setExpandedAdmin] = useState(null);
   const [expandedTv, setExpandedTv] = useState(null);
+  const [deletingAdmin, setDeletingAdmin] = useState(null);
+  const [confirmTarget, setConfirmTarget] = useState(null); // admin pending delete confirmation
 
   const loadOverview = useCallback(async () => {
     try {
@@ -598,6 +716,32 @@ function OverviewPanel({ authHeaders, onLogout, reloadToken }) {
     loadOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadOverview, reloadToken]);
+
+  async function handleDeleteAdmin(username) {
+    setDeletingAdmin(username);
+    setOverviewError(null);
+    try {
+      const res = await fetch(`/api/admins/${encodeURIComponent(username)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(body.detail || "Failed to delete admin.");
+      }
+      if (expandedAdmin === username) setExpandedAdmin(null);
+      await loadOverview();
+    } catch (err) {
+      setOverviewError(err.message);
+    } finally {
+      setDeletingAdmin(null);
+      setConfirmTarget(null);
+    }
+  }
 
   const trimmedQuery = query.trim().toLowerCase();
   const matchesQuery = useCallback(
@@ -669,6 +813,8 @@ function OverviewPanel({ authHeaders, onLogout, reloadToken }) {
           }
           expandedTv={expandedTv}
           onToggleTv={(code) => setExpandedTv((current) => (current === code ? null : code))}
+          onRequestDelete={setConfirmTarget}
+          deleting={deletingAdmin === admin.username}
         />
       ))}
 
@@ -684,6 +830,17 @@ function OverviewPanel({ authHeaders, onLogout, reloadToken }) {
             />
           ))}
         </div>
+      )}
+
+      {confirmTarget && (
+        <ConfirmDialog
+          title="Delete admin?"
+          message={`Delete admin "${confirmTarget.username}"? This also permanently deletes their ${confirmTarget.tvs.length} TV${confirmTarget.tvs.length === 1 ? "" : "s"} and cannot be undone.`}
+          confirmLabel="Delete admin"
+          busy={deletingAdmin === confirmTarget.username}
+          onConfirm={() => handleDeleteAdmin(confirmTarget.username)}
+          onCancel={() => setConfirmTarget(null)}
+        />
       )}
     </div>
   );

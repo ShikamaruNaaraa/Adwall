@@ -361,6 +361,19 @@ export async function listAdmins() {
   }));
 }
 
+/// Permanently deletes an admin account and its login sessions. Does NOT
+/// touch that admin's TVs - callers must remove those separately (see
+/// store.deleteAdminTvs) before calling this, since TV cleanup involves
+/// live SSE connections that this DB-only layer has no access to.
+/// Returns true if an admin row was actually deleted, false if the
+/// username didn't exist.
+export async function deleteAdmin(username) {
+  await ensureSchema();
+  await pool.query(`DELETE FROM admin_sessions WHERE username = ?`, [username]);
+  const [result] = await pool.query(`DELETE FROM admins WHERE username = ?`, [username]);
+  return (result.affectedRows || 0) > 0;
+}
+
 // --- Master admin (single account, dashboard login) -----------------------
 //
 // Throws on failure (same reasoning as the admins functions above): a DB

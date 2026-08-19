@@ -323,6 +323,22 @@ export function deleteTv(code) {
 }
 
 
+// Removes every TV owned by the given admin (same cleanup as deleteTv, run
+// per TV: live SSE tells the TV app it's been removed, then it's dropped
+// from memory and the database). Used right before an admin account is
+// deleted, so no orphaned TVs are left pointing at a username that no
+// longer exists. Returns the number of TVs removed.
+export function deleteAdminTvs(adminUsername) {
+  let removed = 0;
+  for (const entry of Array.from(codes.values())) {
+    if ((entry.adminUsername || null) === adminUsername) {
+      if (deleteTv(entry.code)) removed++;
+    }
+  }
+  return removed;
+}
+
+
 // --- Service ads --------------------------------------------------------
 //
 // Admin-wide ads with a play `interval`: after every N regular ads shown on
