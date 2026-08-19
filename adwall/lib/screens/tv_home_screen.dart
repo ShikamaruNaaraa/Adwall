@@ -428,7 +428,17 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
     }
 
     if (!mounted || generation != _loadGeneration) return;
-    _timer = Timer(Duration(seconds: item.durationSeconds), _next);
+    // Videos must always play to completion, even if that runs longer than
+    // the common duration configured for image ads. Only images use the
+    // shared/default timing.
+    final videoController = _controller;
+    final effectiveDuration = (item.mediaType == 'video' &&
+            videoController != null &&
+            videoController.value.isInitialized &&
+            videoController.value.duration > Duration.zero)
+        ? videoController.value.duration
+        : Duration(seconds: item.durationSeconds);
+    _timer = Timer(effectiveDuration, _next);
   }
 
   void _next() {

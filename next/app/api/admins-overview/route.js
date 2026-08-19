@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
-import { listAdmins } from "../../../lib/db";
+import { listAdmins, verifyMasterAdminSession } from "../../../lib/db";
 import { listAllTvs, ensureHydrated } from "../../../lib/store";
 
 // GET /api/admins-overview - master dashboard: every admin, each admin's
 // TVs, and the ads currently playing on each TV (regular + service ads).
 // TVs with no admin_username (e.g. created before this feature existed)
-// are grouped under "unassigned".
-export async function GET() {
+// are grouped under "unassigned". Requires a valid master-admin session.
+export async function GET(request) {
+  const auth = request.headers.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!(await verifyMasterAdminSession(token))) {
+    return NextResponse.json({ detail: "Not authenticated." }, { status: 401 });
+  }
   await ensureHydrated();
   try {
     const admins = await listAdmins();

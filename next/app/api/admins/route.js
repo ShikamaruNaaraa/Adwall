@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createAdmin, listAdmins } from "../../../lib/db";
+import { createAdmin, listAdmins, verifyMasterAdminSession } from "../../../lib/db";
 
 const PASSWORD_RULE_MESSAGE =
   "Password must be at least 8 characters and include at least 1 letter and 1 number.";
@@ -13,8 +13,21 @@ function isValidPassword(password) {
   );
 }
 
+// Both handlers below require a valid master-admin session: this route
+// creates/lists the admin accounts that manage TVs, so it must only be
+// reachable by the logged-in master admin, not just gated in the UI.
+async function requireMasterAdmin(request) {
+  const auth = request.headers.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  const username = await verifyMasterAdminSession(token);
+  return username;
+}
+
 // GET /api/admins - list every admin username (master dashboard).
-export async function GET() {
+export async function GET(request) {
+  if (!(await requireMasterAdmin(request))) {
+    return NextResponse.json({ detail: "Not authenticated." }, { status: 401 });
+  }
   try {
     const admins = await listAdmins();
     return NextResponse.json(admins);
@@ -29,6 +42,9 @@ export async function GET() {
 // POST /api/admins - master admin creates a new admin account.
 // JSON body: { username, password }. Rejects a duplicate username with 409.
 export async function POST(request) {
+  if (!(await requireMasterAdmin(request))) {
+    return NextResponse.json({ detail: "Not authenticated." }, { status: 401 });
+  }
   let body;
   try {
     body = await request.json();

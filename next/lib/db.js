@@ -50,6 +50,35 @@ const CREATE_ADMINS_TABLE_SQL = `
   );
 `;
 
+// The single master-admin account for the /next dashboard (page.js). This is
+// deliberately a different table from `admins`: the master admin creates and
+// oversees regular admins, so it can't be just another row in that table.
+// `singleton_guard` is always 1 and UNIQUE, so the database itself refuses a
+// second row - this is what actually enforces "only 1 admin at a time" even
+// under concurrent signup requests, not just a check in JS.
+const CREATE_MASTER_ADMIN_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS master_admin (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    singleton_guard TINYINT NOT NULL UNIQUE DEFAULT 1,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`;
+
+// Login sessions for the master admin, persisted (not just in-memory) so a
+// session survives a server restart or a shared-hosting process recycle.
+// Tokens are opaque random strings; expired rows are simply ignored by
+// verifyMasterAdminSession rather than actively swept.
+const CREATE_MASTER_ADMIN_SESSIONS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS master_admin_sessions (
+    token VARCHAR(64) PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+  );
+`;
+
 let schemaReadyPromise = null;
 
 // Runs once per server process; idempotent (CREATE TABLE IF NOT EXISTS).
@@ -78,6 +107,8 @@ function ensureSchema() {
           .catch(() => {})
       )
       .then(() => pool.query(CREATE_ADMINS_TABLE_SQL))
+      .then(() => pool.query(CREATE_MASTER_ADMIN_TABLE_SQL))
+      .then(() => pool.query(CREATE_MASTER_ADMIN_SESSIONS_TABLE_SQL))
       .catch((err) => {
         console.warn("[db] failed to ensure tv_connections table exists:", err.message);
         schemaReadyPromise = null; // allow retry on next call
@@ -200,6 +231,18 @@ export async function deleteTvConnection(code) {
   }
 }
 
+/// Permanently removes every TV row with no admin assigned. A TV can't
+/// exist unassigned, so this is used both for one-off cleanup and could be
+/// called after any operation that might otherwise leave one behind.
+/// Returns the number of rows deleted.
+export async function deleteUnassignedTvConnections() {
+  await ensureSchema();
+  const [result] = await pool.query(
+    `DELETE FROM tv_connections WHERE admin_username IS NULL`
+  );
+  return result.affectedRows || 0;
+}
+
 // --- Admin accounts -------------------------------------------------------
 //
 // Unlike the TV-connection functions above, these throw on failure instead
@@ -278,6 +321,90 @@ export async function listAdmins() {
     mustChangePassword: !!row.must_change_password,
     createdAt: row.created_at,
   }));
+}
+
+// --- Master admin (single account, dashboard login) -----------------------
+//
+// Throws on failure (same reasoning as the admins functions above): a DB
+// hiccup here must not silently let a login/signup succeed or fail wrong.
+
+const MASTER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/// Whether a master admin account has already been created. The dashboard
+/// uses this to decide whether to show the signup button at all.
+export async function masterAdminExists() {
+  await ensureSchema();
+  const [rows] = await pool.query(`SELECT id FROM master_admin LIMIT 1`);
+  return rows.length > 0;
+}
+
+/// Creates the one and only master admin account. Throws with code
+/// 'MASTER_ADMIN_EXISTS' if one already exists (also enforced at the DB
+/// level by the singleton_guard UNIQUE column, so this is race-safe).
+export async function createMasterAdmin(username, password) {
+  await ensureSchema();
+  const passwordHash = await hashPassword(password);
+  try {
+    await pool.query(
+      `INSERT INTO master_admin (username, password_hash) VALUES (?, ?)`,
+      [username, passwordHash]
+    );
+  } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      const dupErr = new Error("A master admin account already exists.");
+      dupErr.code = "MASTER_ADMIN_EXISTS";
+      throw dupErr;
+    }
+    throw err;
+  }
+  return createMasterAdminSession(username);
+}
+
+/// Verifies the master admin's username/password. Returns a fresh session
+/// token on success, or null if the credentials don't match.
+export async function verifyMasterAdminLogin(username, password) {
+  await ensureSchema();
+  const [rows] = await pool.query(
+    `SELECT username, password_hash FROM master_admin WHERE username = ?`,
+    [username]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const ok = await verifyPassword(password, row.password_hash);
+  if (!ok) return null;
+  return createMasterAdminSession(row.username);
+}
+
+async function createMasterAdminSession(username) {
+  const token = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + MASTER_SESSION_TTL_MS);
+  await pool.query(
+    `INSERT INTO master_admin_sessions (token, username, expires_at) VALUES (?, ?, ?)`,
+    [token, username, expiresAt]
+  );
+  return { username, token };
+}
+
+/// Verifies a bearer token from the Authorization header. Returns the
+/// master admin's username if the token is valid and unexpired, else null.
+export async function verifyMasterAdminSession(token) {
+  if (!token) return null;
+  await ensureSchema();
+  const [rows] = await pool.query(
+    `SELECT username, expires_at FROM master_admin_sessions WHERE token = ?`,
+    [token]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (new Date(row.expires_at).getTime() < Date.now()) return null;
+  return row.username;
+}
+
+/// Logs the master admin out by deleting their session token.
+export async function deleteMasterAdminSession(token) {
+  if (!token) return;
+  await ensureSchema();
+  await pool.query(`DELETE FROM master_admin_sessions WHERE token = ?`, [token]);
 }
 
 export { pool };

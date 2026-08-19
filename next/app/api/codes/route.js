@@ -15,6 +15,12 @@ export async function POST(request) {
     return NextResponse.json({ detail: "nickname is required" }, { status: 400 });
   }
   const adminUsername = (body?.admin_username || "").trim() || null;
+  if (!adminUsername) {
+    return NextResponse.json(
+      { detail: "admin_username is required - a TV must be assigned to an admin." },
+      { status: 400 }
+    );
+  }
 
   const code = createPairingCode(nickname, adminUsername);
   return NextResponse.json({ code });
