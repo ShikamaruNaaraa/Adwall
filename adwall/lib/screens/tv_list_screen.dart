@@ -119,6 +119,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   bool _savingOrientation = false;
   String? _error;
   int _defaultDuration = 10;
+  late Future<List<TvSummary>> _tvsFuture;
 
   @override
   void initState() {
@@ -126,6 +127,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     _playlist = List.of(widget.tv.playlist);
     _orientation = widget.tv.orientation;
     if (_playlist.isNotEmpty) _defaultDuration = _playlist.first.durationSeconds;
+    _tvsFuture = widget.pairingService.fetchTvs();
   }
 
   Future<void> _setOrientation(String orientation) async {
@@ -201,7 +203,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   Future<List<String>?> _pickTargetTvs() async {
     List<TvSummary> tvs;
     try {
-      tvs = await widget.pairingService.fetchTvs();
+      tvs = await _tvsFuture;
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
       return null;
