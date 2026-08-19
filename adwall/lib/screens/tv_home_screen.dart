@@ -473,7 +473,7 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
     }
     return Image.network(
       item.mediaUrl,
-      fit: BoxFit.contain,
+      fit: BoxFit.fill,
       errorBuilder: (context, error, stackTrace) => const Icon(
         Icons.broken_image,
         color: Colors.white54,
