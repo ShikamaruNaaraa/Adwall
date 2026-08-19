@@ -238,6 +238,7 @@ function AdminRow({ admin, expanded, onToggle, expandedTv, onToggleTv }) {
           width: "100%",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
           gap: 10,
           padding: 16,
           border: "none",
@@ -246,11 +247,11 @@ function AdminRow({ admin, expanded, onToggle, expandedTv, onToggleTv }) {
           textAlign: "left",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <Chevron open={expanded} />
-          <h3 style={{ margin: 0, fontSize: 16, color: theme.text }}>{admin.username}</h3>
+          <h3 style={{ margin: 0, fontSize: 16, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{admin.username}</h3>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           {admin.mustChangePassword && (
             <span style={{ fontSize: 12, color: "#b7791f" }}>Password not yet changed</span>
           )}
@@ -617,7 +618,7 @@ function OverviewPanel({ authHeaders, onLogout, reloadToken }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, marginBottom: 4, color: theme.text }}>Admins, TVs &amp; ads</h1>
           <p style={{ color: theme.textMuted, marginTop: 0, fontSize: 14 }}>
@@ -691,11 +692,17 @@ function OverviewPanel({ authHeaders, onLogout, reloadToken }) {
 function Dashboard({ masterUsername, token, onLogout }) {
   const [section, setSection] = useState("overview"); // 'create' | 'overview'
   const [reloadToken, setReloadToken] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const authHeaders = useCallback(
     () => ({ Authorization: `Bearer ${token}` }),
     [token]
   );
+
+  function goToSection(next) {
+    setSection(next);
+    setMobileNavOpen(false);
+  }
 
   return (
     <div
@@ -706,19 +713,104 @@ function Dashboard({ masterUsername, token, onLogout }) {
         background: theme.blueSoft,
       }}
     >
-      {/* Left nav */}
+      <style>{`
+        .adwall-sidebar {
+          width: 232px;
+          height: 100vh;
+          height: 100dvh; /* actual visible viewport on mobile, so nothing hides behind browser chrome */
+          transform: translateX(0);
+        }
+        .adwall-main {
+          margin-left: 232px;
+          padding: 40px 40px;
+          max-width: 880px;
+        }
+        .adwall-mobile-topbar { display: none; }
+        .adwall-sidebar-backdrop { display: none; }
+
+        @media (max-width: 860px) {
+          .adwall-sidebar {
+            width: 260px;
+            max-width: 82vw;
+            transform: translateX(-100%);
+            transition: transform 0.22s ease;
+            z-index: 60;
+            box-shadow: 2px 0 16px rgba(31, 42, 55, 0.12);
+          }
+          .adwall-sidebar.adwall-sidebar-open { transform: translateX(0); }
+          .adwall-main {
+            margin-left: 0;
+            padding: 20px 16px 32px;
+            max-width: 100%;
+          }
+          .adwall-mobile-topbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            background: ${theme.white};
+            border-bottom: 1px solid ${theme.blueBorder};
+            padding: 12px 16px;
+          }
+          .adwall-sidebar-backdrop.adwall-sidebar-backdrop-open {
+            display: block;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.35);
+            z-index: 50;
+          }
+        }
+      `}</style>
+
+      {/* Mobile-only top bar with hamburger toggle - hidden on desktop via CSS */}
+      <div className="adwall-mobile-topbar">
+        <button
+          onClick={() => setMobileNavOpen(true)}
+          aria-label="Open menu"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 36,
+            height: 36,
+            border: `1px solid ${theme.blueBorder}`,
+            borderRadius: 8,
+            background: theme.white,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M3 6h18M3 12h18M3 18h18" stroke={theme.text} strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>AdWall</div>
+      </div>
+
+      {/* Backdrop, shown behind the drawer only while it's open on mobile */}
+      <div
+        className={`adwall-sidebar-backdrop${mobileNavOpen ? " adwall-sidebar-backdrop-open" : ""}`}
+        onClick={() => setMobileNavOpen(false)}
+      />
+
+      {/* Left nav - fixed on desktop; an off-canvas drawer on mobile */}
       <aside
+        className={`adwall-sidebar${mobileNavOpen ? " adwall-sidebar-open" : ""}`}
         style={{
-          width: 232,
           flexShrink: 0,
+          boxSizing: "border-box",
           background: theme.white,
           borderRight: `1px solid ${theme.blueBorder}`,
           display: "flex",
           flexDirection: "column",
           padding: "20px 12px",
-          position: "sticky",
+          position: "fixed",
           top: 0,
-          height: "100vh",
+          left: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
         }}
       >
         <div style={{ padding: "4px 8px 20px" }}>
@@ -730,12 +822,12 @@ function Dashboard({ masterUsername, token, onLogout }) {
           <NavItem
             label="Create admin user"
             active={section === "create"}
-            onClick={() => setSection("create")}
+            onClick={() => goToSection("create")}
           />
           <NavItem
             label="Admins, TVs & ads"
             active={section === "overview"}
-            onClick={() => setSection("overview")}
+            onClick={() => goToSection("overview")}
           />
         </nav>
 
@@ -766,7 +858,7 @@ function Dashboard({ masterUsername, token, onLogout }) {
       </aside>
 
       {/* Main content */}
-      <main style={{ flex: 1, padding: "40px 40px", maxWidth: 880 }}>
+      <main className="adwall-main" style={{ flex: 1 }}>
         {section === "create" ? (
           <CreateAdminPanel
             authHeaders={authHeaders}
