@@ -79,6 +79,19 @@ const CREATE_MASTER_ADMIN_SESSIONS_TABLE_SQL = `
   );
 `;
 
+// Login sessions for regular admins (see /api/admins/login). Same shape and
+// reasoning as master_admin_sessions - persisted so a login survives a
+// restart, tokens are opaque randoms, expired rows are ignored rather than
+// swept.
+const CREATE_ADMIN_SESSIONS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS admin_sessions (
+    token VARCHAR(64) PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+  );
+`;
+
 let schemaReadyPromise = null;
 
 // Runs once per server process; idempotent (CREATE TABLE IF NOT EXISTS).
@@ -106,9 +119,17 @@ function ensureSchema() {
           )
           .catch(() => {})
       )
+      .then(() =>
+        pool
+          .query(
+            "ALTER TABLE tv_connections ADD COLUMN transition VARCHAR(20) NOT NULL DEFAULT 'none'"
+          )
+          .catch(() => {})
+      )
       .then(() => pool.query(CREATE_ADMINS_TABLE_SQL))
       .then(() => pool.query(CREATE_MASTER_ADMIN_TABLE_SQL))
       .then(() => pool.query(CREATE_MASTER_ADMIN_SESSIONS_TABLE_SQL))
+      .then(() => pool.query(CREATE_ADMIN_SESSIONS_TABLE_SQL))
       .catch((err) => {
         console.warn("[db] failed to ensure tv_connections table exists:", err.message);
         schemaReadyPromise = null; // allow retry on next call
@@ -200,11 +221,23 @@ export async function recordOrientationUpdated(code, orientation) {
   }
 }
 
+export async function recordTransitionUpdated(code, transition) {
+  try {
+    await ensureSchema();
+    await pool.query(
+      `UPDATE tv_connections SET transition = ? WHERE code = ?`,
+      [transition, code]
+    );
+  } catch (err) {
+    console.warn("[db] recordTransitionUpdated failed:", err.message);
+  }
+}
+
 export async function loadAllPairings() {
   try {
     await ensureSchema();
     const [rows] = await pool.query(
-      `SELECT code, nickname, tv_device_id, status, playlist, admin_username, orientation FROM tv_connections`
+      `SELECT code, nickname, tv_device_id, status, playlist, admin_username, orientation, transition FROM tv_connections`
     );
     return rows.map((row) => ({
       code: row.code,
@@ -214,12 +247,14 @@ export async function loadAllPairings() {
       playlist: row.playlist ? JSON.parse(row.playlist) : [],
       adminUsername: row.admin_username,
       orientation: row.orientation || "landscape",
+      transition: row.transition || "none",
     }));
   } catch (err) {
     console.warn("[db] loadAllPairings failed:", err.message);
     return [];
   }
 }
+
 
 /// Permanently remove a TV's row (used when the admin deletes a TV).
 export async function deleteTvConnection(code) {
@@ -271,8 +306,8 @@ export async function createAdmin(username, password) {
 }
 
 /// Verifies a username/password pair. Returns
-/// { username, mustChangePassword } on success, or null if the username
-/// doesn't exist or the password is wrong.
+/// { username, mustChangePassword, token } on success, or null if the
+/// username doesn't exist or the password is wrong.
 export async function verifyAdminLogin(username, password) {
   await ensureSchema();
   const [rows] = await pool.query(
@@ -283,9 +318,11 @@ export async function verifyAdminLogin(username, password) {
   if (!row) return null;
   const ok = await verifyPassword(password, row.password_hash);
   if (!ok) return null;
+  const { token } = await createAdminSession(row.username);
   return {
     username: row.username,
     mustChangePassword: !!row.must_change_password,
+    token,
   };
 }
 
@@ -307,6 +344,7 @@ export async function changeAdminPassword(username, currentPassword, newPassword
     `UPDATE admins SET password_hash = ?, must_change_password = 0 WHERE username = ?`,
     [newHash, username]
   );
+  await pool.query(`DELETE FROM admin_sessions WHERE username = ?`, [username]);
   return true;
 }
 
@@ -407,6 +445,40 @@ export async function deleteMasterAdminSession(token) {
   await pool.query(`DELETE FROM master_admin_sessions WHERE token = ?`, [token]);
 }
 
+// --- Regular admin sessions -------------------------------------------
+
+const ADMIN_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+async function createAdminSession(username) {
+  const token = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + ADMIN_SESSION_TTL_MS);
+  await pool.query(
+    `INSERT INTO admin_sessions (token, username, expires_at) VALUES (?, ?, ?)`,
+    [token, username, expiresAt]
+  );
+  return { username, token };
+}
+
+/// Verifies a bearer token from the Authorization header. Returns the
+/// admin's username if the token is valid and unexpired, else null.
+export async function verifyAdminSession(token) {
+  if (!token) return null;
+  await ensureSchema();
+  const [rows] = await pool.query(
+    `SELECT username, expires_at FROM admin_sessions WHERE token = ?`,
+    [token]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (new Date(row.expires_at).getTime() < Date.now()) return null;
+  return row.username;
+}
+
+/// Logs an admin out by deleting their session token.
+export async function deleteAdminSession(token) {
+  if (!token) return;
+  await ensureSchema();
+  await pool.query(`DELETE FROM admin_sessions WHERE token = ?`, [token]);
+}
+
 export { pool };
-
-

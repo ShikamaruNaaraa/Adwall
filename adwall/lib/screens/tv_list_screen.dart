@@ -2,6 +2,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
 
+/// Turns a raw exception into a short, non-technical message for the UI.
+String _friendlyError(Object e) {
+  if (e is PairingException) return e.message;
+  return 'Something went wrong. Please try again.';
+}
+
 /// Admin screen: shows every paired TV and lets the admin pick one, then
 /// pick an image/video file and push it to that TV.
 class TvListScreen extends StatefulWidget {
@@ -50,7 +56,7 @@ class _TvListScreenState extends State<TvListScreen> {
               return ListView(
                 children: [
                   const SizedBox(height: 80),
-                  Center(child: Text('Failed to load TVs: ${snapshot.error}')),
+                  Center(child: Text('Could not load TVs. Pull down to try again.')),
                 ],
               );
             }
@@ -115,17 +121,21 @@ class TvMediaScreen extends StatefulWidget {
 class _TvMediaScreenState extends State<TvMediaScreen> {
   late List<PlaylistItem> _playlist;
   late String _orientation;
+  late String _transition;
   bool _uploading = false;
   bool _savingOrientation = false;
+  bool _savingTransition = false;
   String? _error;
   int _defaultDuration = 10;
   late Future<List<TvSummary>> _tvsFuture;
+  bool _gridView = false;
 
   @override
   void initState() {
     super.initState();
     _playlist = List.of(widget.tv.playlist);
     _orientation = widget.tv.orientation;
+    _transition = widget.tv.transition;
     if (_playlist.isNotEmpty) _defaultDuration = _playlist.first.durationSeconds;
     _tvsFuture = widget.pairingService.fetchTvs();
   }
@@ -140,11 +150,28 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
       );
       if (mounted) setState(() => _orientation = updated);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = _friendlyError(e));
     } finally {
       if (mounted) setState(() => _savingOrientation = false);
     }
   }
+
+  Future<void> _setTransition(String transition) async {
+    if (transition == _transition || _savingTransition) return;
+    setState(() => _savingTransition = true);
+    try {
+      final updated = await widget.pairingService.updateTvTransition(
+        widget.tv.code,
+        transition,
+      );
+      if (mounted) setState(() => _transition = updated);
+    } catch (e) {
+      if (mounted) setState(() => _error = _friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _savingTransition = false);
+    }
+  }
+
 
   Future<void> _pickAndSend() async {
     final result = await FilePicker.pickFiles(
@@ -191,7 +218,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
         );
       }
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = _friendlyError(e));
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -205,7 +232,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     try {
       tvs = await _tvsFuture;
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = _friendlyError(e));
       return null;
     }
     if (!mounted) return null;
@@ -322,7 +349,46 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
       );
       if (mounted) setState(() => _playlist = updated);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = _friendlyError(e));
+    }
+  }
+
+  Future<void> _editItemName(int index) async {
+    final item = _playlist[index];
+    final controller = TextEditingController(text: item.displayName);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename ad'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Name'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) Navigator.pop(context, name);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (value == null || !mounted) return;
+
+    try {
+      final updated = await widget.pairingService.updatePlaylistItemName(
+        widget.tv.code,
+        index: index,
+        name: value,
+      );
+      if (mounted) setState(() => _playlist = updated);
+    } catch (e) {
+      if (mounted) setState(() => _error = _friendlyError(e));
     }
   }
 
@@ -339,7 +405,87 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
       if (mounted) {
         setState(() {
           _playlist.insert(index, removed);
-          _error = e.toString();
+          _error = _friendlyError(e);
+        });
+      }
+    }
+  }
+
+  Future<void> _confirmRemoveItem(int index) async {
+    final item = _playlist[index];
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove ad?'),
+        content: Text('"${item.displayName}" will be removed from this TV.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) _removeItem(index);
+  }
+
+  /// Shows the rename/edit-duration options for one grid item, triggered by
+  /// a long-press on its thumbnail so it doesn't clash with drag-to-reorder.
+  Future<void> _showImageOptions(int index) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.drive_file_rename_outline),
+              title: const Text('Rename'),
+              onTap: () {
+                Navigator.pop(context);
+                _editItemName(index);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('Edit duration'),
+              onTap: () {
+                Navigator.pop(context);
+                _editItemDuration(index);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Moves a playlist item from one position to another, updating the UI
+  /// immediately and reverting if the backend call fails.
+  Future<void> _reorderItem(int fromIndex, int toIndex) async {
+    if (fromIndex == toIndex) return;
+    final previous = List.of(_playlist);
+    setState(() {
+      final item = _playlist.removeAt(fromIndex);
+      _playlist.insert(toIndex, item);
+    });
+    try {
+      final updated = await widget.pairingService.reorderPlaylistItem(
+        widget.tv.code,
+        fromIndex: fromIndex,
+        toIndex: toIndex,
+      );
+      if (mounted) setState(() => _playlist = updated);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _playlist = previous;
+          _error = _friendlyError(e);
         });
       }
     }
@@ -382,46 +528,70 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
           children: [
             Row(
               children: [
+                const Expanded(child: Text('Image transition')),
+                DropdownButton<String>(
+                  value: _transition,
+                  onChanged: _savingTransition
+                      ? null
+                      : (value) {
+                          if (value != null) _setTransition(value);
+                        },
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'none',
+                      child: Text('None'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'slide_left_to_right',
+                      child: Text('Slide (left to right)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'slide_right_to_left',
+                      child: Text('Slide (right to left)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'slide_top_to_bottom',
+                      child: Text('Slide (top to bottom)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'slide_bottom_to_top',
+                      child: Text('Slide (bottom to top)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'fade',
+                      child: Text('Fade'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'blur',
+                      child: Text('Blur'),
+                    ),
+                  ],
+                ),
+
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
                 Expanded(child: Text('${_playlist.length} ad(s)')),
+                IconButton(
+                  tooltip: _gridView ? 'List view' : 'Grid view',
+                  icon: Icon(_gridView ? Icons.view_list : Icons.grid_view),
+                  onPressed: () => setState(() => _gridView = !_gridView),
+                ),
                 OutlinedButton.icon(
                   onPressed: _setDurationForAll,
                   icon: const Icon(Icons.timer),
                   label: const Text('Same time for all'),
                 ),
+
               ],
             ),
             const SizedBox(height: 12),
             Expanded(
               child: _playlist.isEmpty
                   ? const Center(child: Text('No ads added yet.'))
-                  : ListView.separated(
-                      itemCount: _playlist.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        final item = _playlist[index];
-                        return Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.image),
-                            title: Text(item.mediaUrl.split('/').last),
-                            subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
-                            onTap: () => _editItemDuration(index),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.edit_outlined),
-                                  onPressed: () => _editItemDuration(index),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.remove_circle_outline),
-                                  onPressed: () => _removeItem(index),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+                  : (_gridView ? _buildGrid() : _buildList()),
             ),
             FilledButton.icon(
               onPressed: _uploading ? null : _pickAndSend,
@@ -435,6 +605,157 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _thumbnail(PlaylistItem item) {
+    if (item.mediaType == 'video') {
+      return Container(
+        color: Colors.black12,
+        alignment: Alignment.center,
+        child: const Icon(Icons.movie, color: Colors.black45),
+      );
+    }
+    return Image.network(
+      widget.pairingService.resolveMediaUrl(item.mediaUrl),
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => Container(
+        color: Colors.black12,
+        alignment: Alignment.center,
+        child: const Icon(Icons.broken_image, color: Colors.black45),
+      ),
+    );
+  }
+
+  Widget _buildList() {
+    return ListView.separated(
+      itemCount: _playlist.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final item = _playlist[index];
+        // Touch-and-hold anywhere on the card to rename it or edit its
+        // duration, same as in grid view.
+        return GestureDetector(
+          onLongPress: () => _showImageOptions(index),
+          child: Card(
+            child: ListTile(
+              leading: SizedBox(
+                width: 48,
+                height: 48,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: _thumbnail(item),
+                ),
+              ),
+              title: Text(item.displayName),
+              subtitle: Text('${item.mediaType} · ${item.durationSeconds}s'),
+              trailing: IconButton(
+                tooltip: 'Remove',
+                icon: const Icon(Icons.remove_circle_outline),
+                onPressed: () => _confirmRemoveItem(index),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGrid() {
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 16,
+        crossAxisSpacing: 16,
+        childAspectRatio: 0.85,
+      ),
+      itemCount: _playlist.length,
+      itemBuilder: (context, index) {
+        final item = _playlist[index];
+        // Accepts a dropped item (dragged via the handle below) and moves
+        // it to this card's position.
+        return DragTarget<int>(
+          onWillAcceptWithDetails: (details) => details.data != index,
+          onAcceptWithDetails: (details) => _reorderItem(details.data, index),
+          builder: (context, candidateData, rejectedData) {
+            final isDropTarget = candidateData.isNotEmpty;
+            return Card(
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: isDropTarget
+                    ? BorderSide(color: Theme.of(context).colorScheme.primary, width: 2)
+                    : BorderSide.none,
+              ),
+              // Touch-and-hold anywhere on the card to rename it or edit
+              // its duration, kept separate from the drag handle below so
+              // reordering and this menu never fight over the same gesture.
+              child: GestureDetector(
+                onLongPress: () => _showImageOptions(index),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: _thumbnail(item)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                          ),
+                          Text(
+                            '${item.durationSeconds}s',
+                            style: const TextStyle(fontSize: 12, color: Colors.black54),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // Drag handle: press-and-drag here to reorder. Kept
+                        // separate from the image so it doesn't clash with
+                        // the long-press menu above.
+                        Draggable<int>(
+                          data: index,
+                          feedback: Material(
+                            color: Colors.transparent,
+                            child: SizedBox(
+                              width: 140,
+                              height: 140,
+                              child: Card(
+                                clipBehavior: Clip.antiAlias,
+                                child: _thumbnail(item),
+                              ),
+                            ),
+                          ),
+                          childWhenDragging: const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(Icons.drag_indicator, color: Colors.black26),
+                          ),
+                          child: const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(Icons.drag_indicator, color: Colors.black54),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Remove',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _confirmRemoveItem(index),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

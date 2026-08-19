@@ -7,6 +7,23 @@ import 'group_animation_screen.dart';
 import 'service_ads_screen.dart';
 import 'tv_list_screen.dart';
 
+/// Turns a raw exception (PairingException, SocketException, FormatException,
+/// etc.) into a short, non-technical message safe to show in the UI.
+String _friendlyError(Object e) {
+  if (e is PairingException) return e.message;
+  final s = e.toString();
+  if (s.contains('SocketException') || s.contains('Connection') || s.contains('Network')) {
+    return 'Could not connect. Check your internet connection and try again.';
+  }
+  if (s.contains('TimeoutException')) {
+    return 'The request took too long. Please try again.';
+  }
+  if (s.contains('FormatException')) {
+    return 'Something went wrong. Please try again.';
+  }
+  return 'Something went wrong. Please try again.';
+}
+
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
 
@@ -20,6 +37,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   late Future<List<TvSummary>> _tvsFuture;
   String? _activeCode;
+  bool _activeCodePaired = false;
   bool _generating = false;
   String? _error;
   int _selectedIndex = 0;
@@ -35,6 +53,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   @override
   void dispose() {
+    _abandonPendingCode();
     _nicknameController.dispose();
     _pageController.dispose();
     super.dispose();
@@ -59,19 +78,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       _generating = true;
       _error = null;
       _activeCode = null;
+      _activeCodePaired = false;
     });
     try {
       final code = await _pairingService.createPairingCode(nickname);
       setState(() => _activeCode = code);
       await _refreshTvs();
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = _friendlyError(e));
     } finally {
       if (mounted) setState(() => _generating = false);
     }
   }
 
   void _goToPage(int index) {
+    if (_selectedIndex == 1 && index != 1) _abandonPendingCode();
     setState(() => _selectedIndex = index);
     _pageController.animateToPage(
       index,
@@ -83,11 +104,25 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       setState(() {
         _error = null;
         _activeCode = null;
+        _activeCodePaired = false;
       });
     } else if (index == 0) {
       _refreshTvs();
     }
   }
+
+  /// If the admin leaves the Add TV page while a just-generated code is
+  /// still waiting for a TV to claim it, delete that code instead of
+  /// leaving it dangling - otherwise it keeps showing as "pending" on the
+  /// master admin panel and can never be reused. A code that has already
+  /// been claimed by a TV is left alone.
+  void _abandonPendingCode() {
+    final code = _activeCode;
+    if (code == null || _activeCodePaired) return;
+    _activeCode = null;
+    unawaited(_pairingService.deleteTv(code).catchError((_) {}));
+  }
+
 
   void _openTv(TvSummary tv) {
     Navigator.of(context)
@@ -130,7 +165,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove TV: $e')),
+          SnackBar(content: Text('Could not remove TV: ${_friendlyError(e)}')),
         );
       }
     } finally {
@@ -187,6 +222,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       body: PageView(
         controller: _pageController,
         onPageChanged: (index) {
+          if (_selectedIndex == 1 && index != 1) _abandonPendingCode();
           setState(() => _selectedIndex = index);
           if (index == 0) _refreshTvs();
         },
@@ -239,7 +275,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             return ListView(
               children: [
                 const SizedBox(height: 80),
-                Center(child: Text('Failed to load TVs: ${snapshot.error}')),
+                Center(child: Text('Could not load TVs. Pull down to try again.')),
               ],
             );
           }
@@ -341,7 +377,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         ],
         if (_activeCode != null) ...[
           const SizedBox(height: 32),
-          _PairingStatus(code: _activeCode!, pairingService: _pairingService),
+          _PairingStatus(
+            code: _activeCode!,
+            pairingService: _pairingService,
+            onPaired: () => _activeCodePaired = true,
+          ),
         ],
       ],
     );
@@ -349,10 +389,15 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 }
 
 class _PairingStatus extends StatelessWidget {
-  const _PairingStatus({required this.code, required this.pairingService});
+  const _PairingStatus({
+    required this.code,
+    required this.pairingService,
+    this.onPaired,
+  });
 
   final String code;
   final PairingService pairingService;
+  final VoidCallback? onPaired;
 
   @override
   Widget build(BuildContext context) {
@@ -361,6 +406,7 @@ class _PairingStatus extends StatelessWidget {
       builder: (context, snapshot) {
         final data = snapshot.data;
         final paired = data?['status'] == 'paired';
+        if (paired) onPaired?.call();
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(20),

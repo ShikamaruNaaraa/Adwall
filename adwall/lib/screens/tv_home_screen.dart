@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show unawaited;
@@ -6,6 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import '../services/pairing_service.dart';
 import '../widgets/group_animation_overlay.dart';
+
+/// Turns a raw exception into a short, non-technical message for the UI.
+String _friendlyError(Object e) {
+  if (e is PairingException) return e.message;
+  return 'Something went wrong. Please try again.';
+}
 
 class TvHomeScreen extends StatefulWidget {
   const TvHomeScreen({super.key});
@@ -26,7 +33,9 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
   String? _connectedCode;
   List<PlaylistItem> _playlist = [];
   String _orientation = 'landscape';
+  String _transition = 'none';
   int _selectedIndex = 0;
+
   StreamSubscription<Map<String, dynamic>>? _pairingSub;
   bool _navVisible = true;
   Timer? _navHideTimer;
@@ -67,7 +76,7 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
       });
       _listenForMedia(saved.code);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = _friendlyError(e));
     }
   }
 
@@ -93,7 +102,7 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
       });
       _listenForMedia(code);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = _friendlyError(e));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -133,9 +142,13 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
       final raw = data['playlist'] as List<dynamic>?;
       if (raw == null) return;
       final orientation = data['orientation'] as String?;
+      final transition = data['transition'] as String?;
       setState(() {
         if (orientation == 'portrait' || orientation == 'landscape') {
           _orientation = orientation!;
+        }
+        if (transition != null) {
+          _transition = transition;
         }
         _playlist = raw
             .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
@@ -339,7 +352,8 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
     }
     Widget content = _playlist.isEmpty
         ? const Center(child: Text('No ads have been sent to this TV yet.'))
-        : _PlaylistDisplay(playlist: _playlist);
+        : _PlaylistDisplay(playlist: _playlist, transition: _transition);
+
     // The animation media needs to appear the way the viewer sees this
     // screen, so it rides along inside the same rotated frame as the ad
     // content rather than sitting on top unrotated.
@@ -368,9 +382,10 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
 
 
 class _PlaylistDisplay extends StatefulWidget {
-  const _PlaylistDisplay({required this.playlist});
+  const _PlaylistDisplay({required this.playlist, this.transition = 'none'});
 
   final List<PlaylistItem> playlist;
+  final String transition;
 
   @override
   State<_PlaylistDisplay> createState() => _PlaylistDisplayState();
@@ -381,6 +396,7 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
   int _index = 0;
   VideoPlayerController? _controller;
   int _loadGeneration = 0;
+
 
   @override
   void initState() {
@@ -464,6 +480,9 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
       if (controller == null || !controller.value.isInitialized) {
         return const Center(child: CircularProgressIndicator(color: Colors.white));
       }
+      // Videos always play through their own controller rather than being
+      // swapped in via AnimatedSwitcher, so the configured transition only
+      // applies to image-to-image changes.
       return Center(
         child: AspectRatio(
           aspectRatio: controller.value.aspectRatio,
@@ -471,8 +490,9 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
         ),
       );
     }
-    return Image.network(
+    final image = Image.network(
       item.mediaUrl,
+      key: ValueKey(item.mediaUrl),
       fit: BoxFit.fill,
       errorBuilder: (context, error, stackTrace) => const Icon(
         Icons.broken_image,
@@ -480,5 +500,75 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
         size: 64,
       ),
     );
+    if (widget.transition == 'none') return image;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 600),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, animation) {
+        final isIncoming = child.key == image.key;
+        return _buildTransition(widget.transition, child, animation, isIncoming);
+      },
+      layoutBuilder: (currentChild, previousChildren) => Stack(
+        fit: StackFit.expand,
+        children: [...previousChildren, ?currentChild],
+      ),
+      child: image,
+    );
+  }
+
+  static const _slideOffsets = <String, Offset>{
+    'slide_left_to_right': Offset(1, 0),
+    'slide_right_to_left': Offset(-1, 0),
+    'slide_top_to_bottom': Offset(0, 1),
+    'slide_bottom_to_top': Offset(0, -1),
+  };
+
+  Widget _buildTransition(
+    String transition,
+    Widget child,
+    Animation<double> animation,
+    bool isIncoming,
+  ) {
+    final slideOffset = _slideOffsets[transition];
+    if (slideOffset != null) {
+      final inAnimation = Tween<Offset>(
+        begin: slideOffset,
+        end: Offset.zero,
+      ).animate(animation);
+      final outAnimation = Tween<Offset>(
+        begin: Offset.zero,
+        end: Offset(-slideOffset.dx, -slideOffset.dy),
+      ).animate(animation);
+      return ClipRect(
+        child: SlideTransition(
+          position: isIncoming ? inAnimation : outAnimation,
+          child: child,
+        ),
+      );
+    }
+    if (transition == 'blur') {
+      return FadeTransition(
+        opacity: animation,
+        child: AnimatedBuilder(
+          animation: animation,
+          child: child,
+          builder: (context, blurredChild) {
+            // Blur peaks mid-transition and clears at both ends, so the
+            // incoming and outgoing images cross-fade through a blurred
+            // blend rather than a sharp cut.
+            final sigma = (1 - (animation.value - 0.5).abs() * 2) * 12;
+            return ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+              child: blurredChild,
+            );
+          },
+        ),
+      );
+    }
+    // 'fade' (and any unrecognized value) - simple cross-fade.
+    return FadeTransition(opacity: animation, child: child);
   }
 }
+
+

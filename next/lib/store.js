@@ -13,13 +13,23 @@ import {
   recordCodeClaimed,
   recordPlaylistUpdated,
   recordOrientationUpdated,
+  recordTransitionUpdated,
   loadAllPairings,
   deleteTvConnection,
 } from "./db";
 
+// Falls back to the file's own name (from its URL) when no display name was
+// given for a playlist item, so older/legacy items still show something
+// sensible instead of a blank name.
+function defaultNameFor(mediaUrl) {
+  const base = String(mediaUrl || "").split("/").pop() || "Untitled";
+  return decodeURIComponent(base);
+}
+
+
 
 // code -> { code, nickname, status: 'pending' | 'paired', tvDeviceId,
-//           playlist: [{ mediaType, mediaUrl, durationSeconds }],
+//           playlist: [{ mediaType, mediaUrl, name, durationSeconds }],
 //           orientation: 'landscape' | 'portrait',
 //           subscribers: Set<controller> }
 //
@@ -64,7 +74,9 @@ async function hydrateFromDatabase() {
       playlist: row.playlist,
       adminUsername: row.adminUsername || null,
       orientation: row.orientation || "landscape",
+      transition: row.transition || "none",
       subscribers: new Set(),
+
     });
   }
 }
@@ -93,7 +105,20 @@ function generateServiceAdId() {
   return `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Whether another TV owned by this admin already uses this nickname
+// (case-insensitively) - nicknames must be unique per admin so the admin
+// app's TV list is never ambiguous about which TV is which.
+export function nicknameExists(nickname, adminUsername) {
+  const normalized = nickname.trim().toLowerCase();
+  for (const entry of codes.values()) {
+    if ((entry.adminUsername || null) !== (adminUsername || null)) continue;
+    if (entry.nickname.trim().toLowerCase() === normalized) return true;
+  }
+  return false;
+}
+
 export function createPairingCode(nickname, adminUsername) {
+
   const code = generateCode();
   codes.set(code, {
     code,
@@ -103,7 +128,9 @@ export function createPairingCode(nickname, adminUsername) {
     playlist: [],
     adminUsername: adminUsername || null,
     orientation: "landscape",
+    transition: "none",
     subscribers: new Set(),
+
   });
   // Best-effort, fire-and-forget: don't block/await, and never let a DB
   // hiccup break code creation for callers.
@@ -144,6 +171,7 @@ export function setPlaylist(code, playlist) {
   entry.playlist = playlist.map((item) => ({
     mediaType: item.mediaType,
     mediaUrl: item.mediaUrl,
+    name: (item.name || "").trim() || defaultNameFor(item.mediaUrl),
     durationSeconds: Math.max(1, Number(item.durationSeconds) || 1),
   }));
   notify(entry);
@@ -153,7 +181,7 @@ export function setPlaylist(code, playlist) {
 
 // Edits a single ad already on a TV's playlist (by its position) - used to
 // change how long that ad plays for without re-uploading it.
-export function updatePlaylistItem(code, index, { durationSeconds }) {
+export function updatePlaylistItem(code, index, { durationSeconds, name } = {}) {
   const entry = codes.get(code);
   if (!entry) return null;
   const item = entry.playlist[index];
@@ -161,6 +189,33 @@ export function updatePlaylistItem(code, index, { durationSeconds }) {
   if (durationSeconds !== undefined) {
     item.durationSeconds = Math.max(1, Number(durationSeconds) || 1);
   }
+  if (name !== undefined) {
+    const trimmed = String(name).trim();
+    if (trimmed) item.name = trimmed;
+  }
+  notify(entry);
+  recordPlaylistUpdated(code, entry.playlist).catch(() => {});
+  return entry.playlist;
+}
+
+// Moves a single ad from one position to another in a TV's playlist
+// (drag-to-reorder), without touching any other item's data.
+export function reorderPlaylistItem(code, fromIndex, toIndex) {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  const { playlist } = entry;
+  if (
+    !Number.isInteger(fromIndex) ||
+    !Number.isInteger(toIndex) ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= playlist.length ||
+    toIndex >= playlist.length
+  ) {
+    return null;
+  }
+  const [moved] = playlist.splice(fromIndex, 1);
+  playlist.splice(toIndex, 0, moved);
   notify(entry);
   recordPlaylistUpdated(code, entry.playlist).catch(() => {});
   return entry.playlist;
@@ -199,6 +254,30 @@ export function setOrientation(code, orientation) {
   return entry;
 }
 
+const VALID_TRANSITIONS = new Set([
+  "none",
+  "slide_left_to_right",
+  "slide_right_to_left",
+  "slide_top_to_bottom",
+  "slide_bottom_to_top",
+  "fade",
+  "blur",
+]);
+
+
+// Sets a TV's slide transition, used when the currently-shown image changes
+// to the next one in the playlist. The TV app reads this from its live SSE
+// stream and animates accordingly.
+export function setTransition(code, transition) {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  entry.transition = VALID_TRANSITIONS.has(transition) ? transition : "none";
+  notify(entry);
+  recordTransitionUpdated(code, entry.transition).catch(() => {});
+  return entry;
+}
+
+
 export function listPairedTvs() {
   return Array.from(codes.values()).filter((e) => e.status === "paired");
 }
@@ -213,6 +292,8 @@ export function listAllTvs() {
     status: e.status,
     adminUsername: e.adminUsername || null,
     orientation: e.orientation || "landscape",
+    transition: e.transition || "none",
+
     connected: e.status === "paired" && !e.disconnected,
     playlist: getEffectivePlaylist(e),
   }));
@@ -449,9 +530,11 @@ function publicView(entry) {
     status: entry.status,
     nickname: entry.nickname,
     orientation: entry.orientation || "landscape",
+    transition: entry.transition || "none",
     playlist: getEffectivePlaylist(entry),
   };
 }
+
 function notify(entry) {
   const payload = `data: ${JSON.stringify(publicView(entry))}\n\n`;
   for (const controller of entry.subscribers) {
