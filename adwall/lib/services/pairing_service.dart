@@ -66,10 +66,14 @@ class PairingService {
   }
 
   static const _loggedInAdminKey = 'logged_in_admin_username';
+  static const _adminTokenKey = 'logged_in_admin_token';
 
-  Future<void> saveLoggedInAdmin(String username) async {
+  Future<void> saveLoggedInAdmin(String username, {String? token}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_loggedInAdminKey, username);
+    if (token != null) {
+      await prefs.setString(_adminTokenKey, token);
+    }
   }
 
   Future<String?> getLoggedInAdmin() async {
@@ -77,9 +81,31 @@ class PairingService {
     return prefs.getString(_loggedInAdminKey);
   }
 
+  Future<String?> _getAdminToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_adminTokenKey);
+  }
+
+  Future<Map<String, String>> _authHeaders() async {
+    final token = await _getAdminToken();
+    return token != null ? {'Authorization': 'Bearer $token'} : {};
+  }
+
   Future<void> clearLoggedInAdmin() async {
+    final token = await _getAdminToken();
+    if (token != null) {
+      try {
+        await http.post(
+          _uri('/api/admins/logout'),
+          headers: {'Authorization': 'Bearer $token'},
+        );
+      } catch (_) {
+        // Best-effort server-side revoke; still clear local state below.
+      }
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_loggedInAdminKey);
+    await prefs.remove(_adminTokenKey);
   }
 
   /// Turns a relative path the backend hands back (e.g. '/media/abc.png')
@@ -88,17 +114,12 @@ class PairingService {
       path.startsWith('http') ? path : '$_baseUrl$path';
 
   /// Admin side: create a new 6-digit code labelled with [nickname],
-  /// attributed to the currently logged-in admin (if any) so the master
-  /// admin dashboard can show which admin added which TV.
+  /// attributed to the currently logged-in admin via their session token.
   Future<String> createPairingCode(String nickname) async {
-    final adminUsername = await getLoggedInAdmin();
     final res = await http.post(
       _uri('/api/codes'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'nickname': nickname,
-        if (adminUsername != null) 'admin_username': adminUsername,
-      }),
+      headers: {'Content-Type': 'application/json', ...await _authHeaders()},
+      body: jsonEncode({'nickname': nickname}),
     );
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
@@ -127,6 +148,20 @@ class PairingService {
     Future<void> connectOnce() async {
       final client = http.Client();
       activeClient = client;
+      // The server sends a ": ping" heartbeat frame every 15s (see
+      // events/route.js) even when nothing has changed, specifically so a
+      // silently-dead connection (e.g. the server process was killed
+      // without a clean TCP close ever reaching this client) doesn't leave
+      // the read loop below waiting forever for bytes that will never
+      // arrive. If we go this long without receiving anything, force the
+      // connection closed so the outer retry loop reconnects.
+      const staleTimeout = Duration(seconds: 35);
+      Timer? staleTimer;
+      void resetStaleTimer() {
+        staleTimer?.cancel();
+        staleTimer = Timer(staleTimeout, () => client.close());
+      }
+
       try {
         final request = http.Request('GET', _uri('/api/codes/$code/events'));
         final response = await client.send(request);
@@ -139,9 +174,11 @@ class PairingService {
           return;
         }
 
+        resetStaleTimer();
         var buffer = '';
         await for (final chunk in response.stream.transform(utf8.decoder)) {
           if (cancelled) return;
+          resetStaleTimer();
           buffer += chunk;
           // SSE frames are separated by a blank line; each frame may have
           // one or more "data: ..." lines.
@@ -166,9 +203,11 @@ class PairingService {
       } catch (e) {
         if (!cancelled) controller.addError(PairingException(e.toString()));
       } finally {
+        staleTimer?.cancel();
         client.close();
       }
     }
+
 
     () async {
       while (!cancelled) {
@@ -204,11 +243,7 @@ class PairingService {
   /// backend scopes the result to admin_username so admins never see each
   /// other's TVs.
   Future<List<TvSummary>> fetchTvs() async {
-    final adminUsername = await getLoggedInAdmin();
-    final uri = _uri('/api/tvs').replace(queryParameters: {
-      if (adminUsername != null) 'admin_username': adminUsername,
-    });
-    final res = await http.get(uri);
+    final res = await http.get(_uri('/api/tvs'), headers: await _authHeaders());
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
@@ -223,11 +258,7 @@ class PairingService {
   /// saved pairing, callers should also call [clearPairing]. Only succeeds
   /// for a TV registered by the currently logged-in admin.
   Future<void> deleteTv(String code) async {
-    final adminUsername = await getLoggedInAdmin();
-    final uri = _uri('/api/codes/$code').replace(queryParameters: {
-      if (adminUsername != null) 'admin_username': adminUsername,
-    });
-    final res = await http.delete(uri);
+    final res = await http.delete(_uri('/api/codes/$code'), headers: await _authHeaders());
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
@@ -238,10 +269,9 @@ class PairingService {
     required String fileName,
     required int durationSeconds,
   }) async {
-    final adminUsername = await getLoggedInAdmin();
     final req = http.MultipartRequest('POST', _uri('/api/codes/$code/media'));
+    req.headers.addAll(await _authHeaders());
     req.fields['duration_seconds'] = durationSeconds.toString();
-    if (adminUsername != null) req.fields['admin_username'] = adminUsername;
     req.files.add(await http.MultipartFile.fromPath(
       'file',
       filePath,
@@ -268,11 +298,10 @@ class PairingService {
     required String fileName,
     required int durationSeconds,
   }) async {
-    final adminUsername = await getLoggedInAdmin();
     final req = http.MultipartRequest('POST', _uri('/api/media'));
+    req.headers.addAll(await _authHeaders());
     req.fields['duration_seconds'] = durationSeconds.toString();
     req.fields['codes'] = jsonEncode(codes);
-    if (adminUsername != null) req.fields['admin_username'] = adminUsername;
     req.files.add(await http.MultipartFile.fromPath(
       'file',
       filePath,
@@ -376,14 +405,60 @@ class PairingService {
     required int index,
     required int durationSeconds,
   }) async {
-    final adminUsername = await getLoggedInAdmin();
     final res = await http.patch(
       _uri('/api/codes/$code/playlist'),
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', ...await _authHeaders()},
       body: jsonEncode({
         'index': index,
         'duration_seconds': durationSeconds,
-        if (adminUsername != null) 'admin_username': adminUsername,
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['playlist'] as List<dynamic>)
+        .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Admin side: rename one ad already on a TV's playlist (identified by
+  /// its position) without re-uploading it.
+  Future<List<PlaylistItem>> updatePlaylistItemName(
+    String code, {
+    required int index,
+    required String name,
+  }) async {
+    final res = await http.patch(
+      _uri('/api/codes/$code/playlist'),
+      headers: {'Content-Type': 'application/json', ...await _authHeaders()},
+      body: jsonEncode({
+        'index': index,
+        'name': name,
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['playlist'] as List<dynamic>)
+        .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Admin side: move one ad already on a TV's playlist from one position
+  /// to another (drag-to-reorder), without touching any other item's data.
+  Future<List<PlaylistItem>> reorderPlaylistItem(
+    String code, {
+    required int fromIndex,
+    required int toIndex,
+  }) async {
+    final res = await http.patch(
+      _uri('/api/codes/$code/playlist'),
+      headers: {'Content-Type': 'application/json', ...await _authHeaders()},
+      body: jsonEncode({
+        'index': fromIndex,
+        'to_index': toIndex,
       }),
     );
     if (res.statusCode != 200) {
@@ -398,12 +473,10 @@ class PairingService {
   /// Admin side: remove one ad already on a TV's playlist (identified by
   /// its position).
   Future<List<PlaylistItem>> removePlaylistItem(String code, {required int index}) async {
-    final adminUsername = await getLoggedInAdmin();
     final uri = _uri('/api/codes/$code/playlist').replace(queryParameters: {
       'index': index.toString(),
-      if (adminUsername != null) 'admin_username': adminUsername,
     });
-    final res = await http.delete(uri);
+    final res = await http.delete(uri, headers: await _authHeaders());
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
     }
@@ -417,14 +490,10 @@ class PairingService {
   /// The TV app receives this over its live SSE stream and rotates its
   /// playback layout to match.
   Future<String> updateTvOrientation(String code, String orientation) async {
-    final adminUsername = await getLoggedInAdmin();
     final res = await http.patch(
       _uri('/api/codes/$code/orientation'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'orientation': orientation,
-        if (adminUsername != null) 'admin_username': adminUsername,
-      }),
+      headers: {'Content-Type': 'application/json', ...await _authHeaders()},
+      body: jsonEncode({'orientation': orientation}),
     );
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
@@ -432,6 +501,24 @@ class PairingService {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return body['orientation'] as String;
   }
+
+  /// Admin side: set the slide transition a TV uses when its currently
+  /// shown image changes to the next one ('none' or 'slide_left_to_right').
+  /// The TV app receives this over its live SSE stream and animates
+  /// accordingly.
+  Future<String> updateTvTransition(String code, String transition) async {
+    final res = await http.patch(
+      _uri('/api/codes/$code/transition'),
+      headers: {'Content-Type': 'application/json', ...await _authHeaders()},
+      body: jsonEncode({'transition': transition}),
+    );
+    if (res.statusCode != 200) {
+      throw PairingException(_errorMessage(res));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return body['transition'] as String;
+  }
+
 
 
   static const _settingsChannel = MethodChannel('adwall/settings');
@@ -484,6 +571,7 @@ class PairingService {
     return AdminLoginResult(
       username: body['username'] as String,
       mustChangePassword: body['mustChangePassword'] as bool? ?? false,
+      token: body['token'] as String,
     );
   }
 
@@ -606,17 +694,26 @@ class PlaylistItem {
     required this.mediaType,
     required this.mediaUrl,
     required this.durationSeconds,
+    this.name,
   });
 
   factory PlaylistItem.fromJson(Map<String, dynamic> json) => PlaylistItem(
         mediaType: json['mediaType'] as String? ?? 'image',
         mediaUrl: json['mediaUrl'] as String,
         durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 10,
+        name: json['name'] as String?,
       );
 
   final String mediaType;
   final String mediaUrl;
   final int durationSeconds;
+
+  /// Display name of this ad. Falls back to the file name in [mediaUrl]
+  /// when the backend hasn't sent one (older items).
+  final String? name;
+
+  String get displayName =>
+      (name != null && name!.trim().isNotEmpty) ? name! : mediaUrl.split('/').last;
 }
 
 class TvSummary {
@@ -626,6 +723,7 @@ class TvSummary {
     required this.playlist,
     required this.connected,
     this.orientation = 'landscape',
+    this.transition = 'none',
   });
 
   factory TvSummary.fromJson(Map<String, dynamic> json) => TvSummary(
@@ -638,6 +736,7 @@ class TvSummary {
         // Defaults to true for older backends that don't send this field.
         connected: json['connected'] as bool? ?? true,
         orientation: json['orientation'] as String? ?? 'landscape',
+        transition: json['transition'] as String? ?? 'none',
       );
 
   final String code;
@@ -645,7 +744,9 @@ class TvSummary {
   final List<PlaylistItem> playlist;
   final bool connected;
   final String orientation;
+  final String transition;
 }
+
 
 class PairedTv {
   const PairedTv({required this.code, required this.nickname});
@@ -658,10 +759,12 @@ class AdminLoginResult {
   const AdminLoginResult({
     required this.username,
     required this.mustChangePassword,
+    required this.token,
   });
 
   final String username;
   final bool mustChangePassword;
+  final String token;
 }
 
 /// An admin-wide ad that automatically plays on every registered TV, after

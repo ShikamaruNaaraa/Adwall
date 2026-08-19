@@ -47,8 +47,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
       if (!mounted) return;
 
+      var loginResult = result;
       if (result.mustChangePassword) {
-        final changed = await Navigator.of(context).push<bool>(
+        final newPassword = await Navigator.of(context).push<String>(
           MaterialPageRoute(
             builder: (_) => _ForcedPasswordChangeScreen(
               service: _service,
@@ -57,13 +58,19 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
             ),
           ),
         );
-        if (changed != true) {
+        if (newPassword == null) {
           setState(() => _submitting = false);
           return;
         }
+        // Changing the password revokes the token issued above, so log in
+        // again to get a fresh, valid session token.
+        loginResult = await _service.adminLogin(
+          username: username,
+          password: newPassword,
+        );
       }
 
-      await _service.saveLoggedInAdmin(result.username);
+      await _service.saveLoggedInAdmin(loginResult.username, token: loginResult.token);
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -203,7 +210,7 @@ class _ForcedPasswordChangeScreenState
         newPassword: newPassword,
       );
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(newPassword);
     } catch (e) {
       setState(() {
         _error = e.toString();
