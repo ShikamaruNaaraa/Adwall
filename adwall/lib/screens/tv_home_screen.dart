@@ -502,9 +502,9 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
     );
     if (widget.transition == 'none') return image;
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 600),
-      switchInCurve: Curves.easeOut,
-      switchOutCurve: Curves.easeIn,
+      duration: const Duration(milliseconds: 700),
+      switchInCurve: Curves.easeInOutCubic,
+      switchOutCurve: Curves.easeInOutCubic,
       transitionBuilder: (child, animation) {
         final isIncoming = child.key == image.key;
         return _buildTransition(widget.transition, child, animation, isIncoming);
@@ -518,8 +518,8 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
   }
 
   static const _slideOffsets = <String, Offset>{
-    'slide_left_to_right': Offset(1, 0),
-    'slide_right_to_left': Offset(-1, 0),
+    'slide_left_to_right': Offset(-1, 0),
+    'slide_right_to_left': Offset(1, 0),
     'slide_top_to_bottom': Offset(0, 1),
     'slide_bottom_to_top': Offset(0, -1),
   };
@@ -532,18 +532,27 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
   ) {
     final slideOffset = _slideOffsets[transition];
     if (slideOffset != null) {
-      final inAnimation = Tween<Offset>(
-        begin: slideOffset,
+      // AnimatedSwitcher drives the incoming child from 0 -> 1 and reverses
+      // the outgoing child from 1 -> 0. The outgoing tween therefore starts
+      // at the opposite edge and ends at center: evaluated on that reversed
+      // timeline it moves from center to the opposite edge. For example, a
+      // right-to-left slide brings the new image in from the right while the
+      // old image exits to the left.
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeInOutCubic);
+      final position = Tween<Offset>(
+        begin: isIncoming ? slideOffset : -slideOffset,
         end: Offset.zero,
-      ).animate(animation);
-      final outAnimation = Tween<Offset>(
-        begin: Offset.zero,
-        end: Offset(-slideOffset.dx, -slideOffset.dy),
-      ).animate(animation);
+      ).animate(curved);
+      // `animation` already runs forward for the incoming image and backward
+      // for the outgoing image, so it gives both images the correct opacity
+      // progression on their respective timelines.
       return ClipRect(
         child: SlideTransition(
-          position: isIncoming ? inAnimation : outAnimation,
-          child: child,
+          position: position,
+          child: FadeTransition(
+            opacity: curved,
+            child: child,
+          ),
         ),
       );
     }
