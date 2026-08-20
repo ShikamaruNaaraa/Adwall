@@ -164,7 +164,12 @@ class PairingService {
 
       try {
         final request = http.Request('GET', _uri('/api/codes/$code/events'));
-        final response = await client.send(request);
+        // A server restart can leave a new TCP/HTTP connection attempt
+        // pending without ever returning headers. Time it out so it falls
+        // through to the retry loop instead of requiring an app restart.
+        final response = await client
+            .send(request)
+            .timeout(const Duration(seconds: 15));
         if (response.statusCode != 200) {
           controller.addError(
             PairingException(
