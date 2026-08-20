@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show unawaited;
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import '../services/pairing_service.dart';
@@ -407,10 +406,23 @@ class _PlaylistDisplayState extends State<_PlaylistDisplay> {
   @override
   void didUpdateWidget(covariant _PlaylistDisplay oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.playlist != widget.playlist || _index >= widget.playlist.length) {
+    if (!_playlistsEqual(oldWidget.playlist, widget.playlist) ||
+        _index >= widget.playlist.length) {
       _index = 0;
       _loadCurrent();
     }
+  }
+
+  bool _playlistsEqual(List<PlaylistItem> a, List<PlaylistItem> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].mediaUrl != b[i].mediaUrl ||
+          a[i].mediaType != b[i].mediaType ||
+          a[i].durationSeconds != b[i].durationSeconds) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _loadCurrent() async {

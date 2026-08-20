@@ -838,6 +838,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     return Image.network(
       widget.pairingService.resolveMediaUrl(item.mediaUrl),
       fit: BoxFit.cover,
+      cacheWidth: 300,
       errorBuilder: (context, error, stackTrace) => Container(
         color: Colors.black12,
         alignment: Alignment.center,
