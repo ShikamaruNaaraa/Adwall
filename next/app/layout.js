@@ -1,6 +1,8 @@
 export const metadata = {
   title: "Adwall Master-Admin",
-  description: "Testing Next.js on Hostinger"
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export const viewport = {
