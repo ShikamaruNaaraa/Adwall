@@ -16,6 +16,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final _passwordController = TextEditingController();
 
   bool _submitting = false;
+  bool _obscurePassword = true;
   String? _error;
 
   @override
@@ -113,11 +114,21 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _passwordController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Password',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () {
+                        setState(() => _obscurePassword = !_obscurePassword);
+                      },
+                    ),
                   ),
-                  obscureText: true,
+                  obscureText: _obscurePassword,
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _handleLogin(),
                 ),
@@ -167,6 +178,8 @@ class _ForcedPasswordChangeScreenState
   final _confirmPasswordController = TextEditingController();
 
   bool _submitting = false;
+  bool _obscureNewPassword = true;
+  bool _obscureConfirmPassword = true;
   String? _error;
 
   static const _passwordHint =
@@ -239,22 +252,47 @@ class _ForcedPasswordChangeScreenState
                 const SizedBox(height: 20),
                 TextField(
                   controller: _newPasswordController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'New password',
                     helperText: _passwordHint,
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureNewPassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () {
+                        setState(
+                          () => _obscureNewPassword = !_obscureNewPassword,
+                        );
+                      },
+                    ),
                   ),
-                  obscureText: true,
+                  obscureText: _obscureNewPassword,
                   textInputAction: TextInputAction.next,
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _confirmPasswordController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Confirm password',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureConfirmPassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () {
+                        setState(
+                          () => _obscureConfirmPassword =
+                              !_obscureConfirmPassword,
+                        );
+                      },
+                    ),
                   ),
-                  obscureText: true,
+                  obscureText: _obscureConfirmPassword,
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _handleSubmit(),
                 ),

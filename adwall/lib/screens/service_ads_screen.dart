@@ -1,6 +1,8 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
+import '../widgets/pill_message.dart';
+import '../widgets/upload_progress_card.dart';
 
 /// Admin screen: manage "service ads" - images that automatically play on
 /// every registered TV, inserted after every [interval] regular ads that
@@ -31,6 +33,9 @@ class ServiceAdsScreen extends StatefulWidget {
 class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
   late Future<List<ServiceAd>> _adsFuture;
   bool _adding = false;
+  double _uploadProgress = 0;
+  String? _uploadingFileName;
+  String? _uploadingFilePath;
   String? _error;
 
   @override
@@ -73,6 +78,9 @@ class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
     setState(() {
       _adding = true;
       _error = null;
+      _uploadingFileName = file.name;
+      _uploadingFilePath = file.path;
+      _uploadProgress = 0;
     });
     try {
       await widget.pairingService.createServiceAd(
@@ -81,17 +89,25 @@ class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
         durationSeconds: settings.durationSeconds,
         interval: settings.interval,
         targetTvCodes: settings.targetTvCodes,
+        onProgress: (progress) {
+          if (mounted) setState(() => _uploadProgress = progress);
+        },
       );
       await _refresh();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Service ad added.')),
-        );
+        showPillMessage(context, 'Service ad added.');
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     } finally {
-      if (mounted) setState(() => _adding = false);
+      if (mounted) {
+        setState(() {
+          _adding = false;
+          _uploadingFileName = null;
+          _uploadingFilePath = null;
+          _uploadProgress = 0;
+        });
+      }
     }
   }
 
@@ -225,6 +241,15 @@ class _ServiceAdsScreenState extends State<ServiceAdsScreen> {
             ),
           ),
         ),
+        if (_adding && _uploadingFilePath != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: UploadProgressCard(
+              filePath: _uploadingFilePath!,
+              fileName: _uploadingFileName ?? '',
+              progress: _uploadProgress,
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(16),
           child: FilledButton.icon(

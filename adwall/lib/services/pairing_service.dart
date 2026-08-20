@@ -288,6 +288,60 @@ class PairingService {
         .toList();
   }
 
+  /// Sends a [http.MultipartRequest], optionally reporting fractional upload
+  /// progress (0.0-1.0) via [onProgress] as the request body streams out.
+  Future<http.StreamedResponse> _sendWithProgress(
+    http.MultipartRequest req, {
+    void Function(double progress)? onProgress,
+  }) async {
+    if (onProgress == null) {
+      return req.send();
+    }
+    final total = req.contentLength;
+    var bytesSent = 0;
+    final byteStream = req.finalize();
+    final progressStream = byteStream.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (data, sink) {
+          bytesSent += data.length;
+          if (total > 0) onProgress((bytesSent / total).clamp(0.0, 1.0));
+          sink.add(data);
+        },
+      ),
+    );
+    final streamedRequest = http.StreamedRequest('POST', req.url)
+      ..headers.addAll(req.headers)
+      ..contentLength = total;
+    unawaited(progressStream
+        .listen(streamedRequest.sink.add,
+            onDone: () => streamedRequest.sink.close(),
+            onError: streamedRequest.sink.addError,
+            cancelOnError: true)
+        .asFuture());
+    final client = http.Client();
+    try {
+      final response = await client.send(streamedRequest);
+      // Fully drain the body before closing the client - send() only
+      // resolves once the response *headers* arrive, so closing right
+      // after it returns (as before) could tear down the connection
+      // while the caller was still trying to read the body, leaving the
+      // upload looking "stuck" at 100% forever instead of completing.
+      final bodyBytes = await response.stream.toBytes();
+      return http.StreamedResponse(
+        Stream.value(bodyBytes),
+        response.statusCode,
+        contentLength: bodyBytes.length,
+        request: response.request,
+        headers: response.headers,
+        isRedirect: response.isRedirect,
+        persistentConnection: response.persistentConnection,
+        reasonPhrase: response.reasonPhrase,
+      );
+    } finally {
+      client.close();
+    }
+  }
+
   /// Admin side: upload one ad and attach it to every TV in [codes], so the
   /// same file can be shown on multiple TVs without re-uploading it.
   /// Returns the code the ad was uploaded for -> that TV's updated playlist.
@@ -297,6 +351,7 @@ class PairingService {
     required String filePath,
     required String fileName,
     required int durationSeconds,
+    void Function(double progress)? onProgress,
   }) async {
     final req = http.MultipartRequest('POST', _uri('/api/media'));
     req.headers.addAll(await _authHeaders());
@@ -307,7 +362,9 @@ class PairingService {
       filePath,
       filename: fileName,
     ));
-    final streamed = await req.send();
+
+    final streamed = await _sendWithProgress(req, onProgress: onProgress);
+
     final res = await http.Response.fromStream(streamed);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
@@ -342,6 +399,7 @@ class PairingService {
     required int durationSeconds,
     required int interval,
     List<String>? targetTvCodes,
+    void Function(double progress)? onProgress,
   }) async {
     final req = http.MultipartRequest('POST', _uri('/api/service-ads'));
     req.fields['duration_seconds'] = durationSeconds.toString();
@@ -354,7 +412,7 @@ class PairingService {
       filePath,
       filename: fileName,
     ));
-    final streamed = await req.send();
+    final streamed = await _sendWithProgress(req, onProgress: onProgress);
     final res = await http.Response.fromStream(streamed);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));

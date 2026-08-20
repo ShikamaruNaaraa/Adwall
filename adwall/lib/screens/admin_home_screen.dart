@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
+import '../widgets/pill_message.dart';
 import 'admin_login_screen.dart';
 import 'group_animation_screen.dart';
 import 'service_ads_screen.dart';
@@ -164,9 +165,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       await _pairingService.deleteTv(tv.code);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not remove TV: ${_friendlyError(e)}')),
-        );
+        showPillMessage(context, 'Could not remove TV: ${_friendlyError(e)}', isError: true);
       }
     } finally {
       await _refreshTvs();

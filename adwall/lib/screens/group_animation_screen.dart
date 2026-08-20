@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../services/pairing_service.dart';
+import '../widgets/pill_message.dart';
 
 /// Admin "Group Animation" section: pick a set of TVs, arrange the order
 /// they sit in left to right, attach one video, then Play to broadcast it
@@ -107,8 +108,7 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
       await _refresh();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed to add TVs: $e')));
+        showPillMessage(context, 'Failed to add TVs: $e', isError: true);
       }
     }
   }
@@ -137,8 +137,7 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
       await _refresh();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed to delete group: $e')));
+        showPillMessage(context, 'Failed to delete group: $e', isError: true);
       }
     }
   }
@@ -174,9 +173,7 @@ class _GroupAnimationScreenState extends State<GroupAnimationScreen> {
 
   Future<void> _playGroup(TvGroup group) async {
     if (!group.hasAnimation) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add an animation to this group first.')),
-      );
+      showPillMessage(context, 'Add an animation to this group first.', isError: true);
       return;
     }
     setState(() {

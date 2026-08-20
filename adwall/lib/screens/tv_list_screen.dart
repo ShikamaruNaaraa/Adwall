@@ -2,7 +2,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+
 import '../services/pairing_service.dart';
+import '../widgets/pill_message.dart';
+import '../widgets/upload_progress_card.dart';
 
 /// Turns a raw exception into a short, non-technical message for the UI.
 String _friendlyError(Object e) {
@@ -125,6 +128,9 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
   late String _orientation;
   late String _transition;
   bool _uploading = false;
+  double _uploadProgress = 0;
+  String? _uploadingFileName;
+  String? _uploadingFilePath;
   bool _savingOrientation = false;
   bool _savingTransition = false;
   String? _error;
@@ -201,11 +207,19 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     try {
       for (final file in result) {
         if (file.path == null) continue;
+        setState(() {
+          _uploadingFileName = file.name;
+          _uploadingFilePath = file.path;
+          _uploadProgress = 0;
+        });
         final results = await widget.pairingService.uploadMediaToTvs(
           codes: targetCodes,
           filePath: file.path!,
           fileName: file.name,
           durationSeconds: _defaultDuration,
+          onProgress: (progress) {
+            if (mounted) setState(() => _uploadProgress = progress);
+          },
         );
         final ownPlaylist = results[widget.tv.code];
         if (mounted && ownPlaylist != null) {
@@ -213,18 +227,22 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
         }
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${result.length} item(s) added to ${targetCodes.length} TV(s)',
-            ),
-          ),
+        showPillMessage(
+          context,
+          '${result.length} item(s) added to ${targetCodes.length} TV(s)',
         );
       }
     } catch (e) {
       if (mounted) setState(() => _error = _friendlyError(e));
     } finally {
-      if (mounted) setState(() => _uploading = false);
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _uploadingFileName = null;
+          _uploadingFilePath = null;
+          _uploadProgress = 0;
+        });
+      }
     }
   }
 
@@ -312,9 +330,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
     if (value == null || !mounted) return;
     setState(() => _defaultDuration = value);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('New ads will use $value seconds. Existing ads keep their durations.')),
-    );
+    showPillMessage(context, 'New ads will use $value seconds. Existing ads keep their durations.');
   }
 
   Future<void> _editItemDuration(int index) async {
@@ -787,6 +803,14 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
                   ? const Center(child: Text('No ads added yet.'))
                   : (_gridView ? _buildGrid() : _buildList()),
             ),
+            if (_uploading && _uploadingFilePath != null) ...[
+              UploadProgressCard(
+                filePath: _uploadingFilePath!,
+                fileName: _uploadingFileName ?? '',
+                progress: _uploadProgress,
+              ),
+              const SizedBox(height: 12),
+            ],
             if (!_selectionMode)
               FilledButton.icon(
                 onPressed: _uploading ? null : _pickAndSend,
