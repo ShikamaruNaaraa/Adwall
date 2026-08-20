@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "Node.js Uptime Test",
+  title: "Adwall Master-Admin",
   description: "Testing Next.js on Hostinger"
 };
 

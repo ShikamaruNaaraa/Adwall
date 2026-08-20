@@ -1001,9 +1001,11 @@ function Dashboard({ masterUsername, token, onLogout }) {
           overflowX: "hidden",
         }}
       >
-        <div style={{ padding: "4px 8px 20px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>AdWall</div>
-          <div style={{ fontSize: 11, color: theme.textMuted }}>Master Admin</div>
+        <div style={{ padding: "4px 8px 20px", display: "flex", alignItems: "center", gap: 8 }}>
+          <img src="/logo.png" alt="Adwall logo" style={{ width: 28, height: 28, objectFit: "contain", borderRadius: 6 }} />
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>Adwall Master-Admin</div>
+          </div>
         </div>
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
