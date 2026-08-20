@@ -282,7 +282,7 @@ class PairingService {
       filePath,
       filename: fileName,
     ));
-    final streamed = await req.send();
+    final streamed = await _sendWithProgress(req);
     final res = await http.Response.fromStream(streamed);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
@@ -299,9 +299,6 @@ class PairingService {
     http.MultipartRequest req, {
     void Function(double progress)? onProgress,
   }) async {
-    if (onProgress == null) {
-      return req.send();
-    }
     final total = req.contentLength;
     var bytesSent = 0;
     final byteStream = req.finalize();
@@ -309,7 +306,9 @@ class PairingService {
       StreamTransformer<List<int>, List<int>>.fromHandlers(
         handleData: (data, sink) {
           bytesSent += data.length;
-          if (total > 0) onProgress((bytesSent / total).clamp(0.0, 1.0));
+          if (total > 0) {
+            onProgress?.call((bytesSent / total).clamp(0.0, 1.0));
+          }
           sink.add(data);
         },
       ),
@@ -317,21 +316,36 @@ class PairingService {
     final streamedRequest = http.StreamedRequest('POST', req.url)
       ..headers.addAll(req.headers)
       ..contentLength = total;
-    unawaited(progressStream
-        .listen(streamedRequest.sink.add,
-            onDone: () => streamedRequest.sink.close(),
-            onError: streamedRequest.sink.addError,
-            cancelOnError: true)
-        .asFuture());
     final client = http.Client();
     try {
-      final response = await client.send(streamedRequest);
+      // Start listening for the server response before piping the file. The
+      // pipe future is deliberately retained: previously it was unawaited,
+      // so an error while streaming the multipart body could leave the UI at
+      // 100% with no request completion to report.
+      final responseFuture = client.send(streamedRequest);
+      final uploadFinished = progressStream.pipe(streamedRequest.sink);
+
+      final completed = await Future.wait<dynamic>([
+        responseFuture.timeout(
+          const Duration(minutes: 5),
+          onTimeout: () => throw PairingException(
+            'The upload did not receive a server response within 5 minutes. Please try again.',
+          ),
+        ),
+        uploadFinished,
+      ]);
+      final response = completed.first as http.StreamedResponse;
       // Fully drain the body before closing the client - send() only
       // resolves once the response *headers* arrive, so closing right
       // after it returns (as before) could tear down the connection
       // while the caller was still trying to read the body, leaving the
       // upload looking "stuck" at 100% forever instead of completing.
-      final bodyBytes = await response.stream.toBytes();
+      final bodyBytes = await response.stream.toBytes().timeout(
+            const Duration(minutes: 5),
+            onTimeout: () => throw PairingException(
+              'The server response took too long to finish. Please try again.',
+            ),
+          );
       return http.StreamedResponse(
         Stream.value(bodyBytes),
         response.statusCode,
@@ -732,7 +746,7 @@ class PairingService {
       filePath,
       filename: fileName,
     ));
-    final streamed = await req.send();
+    final streamed = await _sendWithProgress(req);
     final res = await http.Response.fromStream(streamed);
     if (res.statusCode != 200) {
       throw PairingException(_errorMessage(res));
