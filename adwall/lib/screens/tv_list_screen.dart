@@ -857,7 +857,7 @@ class _TvMediaScreenState extends State<TvMediaScreen> {
     return ReorderableListView.builder(
       itemCount: _playlist.length,
       onReorderStart: (_) => HapticFeedback.mediumImpact(),
-      onReorderItem: (index, offset) => _reorderItem(index, index + offset),
+      onReorderItem: (index, newIndex) => _reorderItem(index, newIndex),
       // Default drag styling paints a tinted background behind the item;
       // this keeps just a clean elevation/shadow lift instead.
       proxyDecorator: (child, index, animation) {

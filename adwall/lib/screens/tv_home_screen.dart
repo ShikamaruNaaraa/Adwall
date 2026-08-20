@@ -72,8 +72,10 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
       setState(() {
         _connectedCode = saved.code;
         _connectedNickname = saved.nickname;
+        _selectedIndex = 1;
       });
       _listenForMedia(saved.code);
+      _scheduleNavHide();
     } catch (e) {
       if (mounted) setState(() => _error = _friendlyError(e));
     }
