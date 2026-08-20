@@ -28,6 +28,7 @@ class UploadProgressCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final processing = progress >= 1;
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -70,20 +71,26 @@ class UploadProgressCard extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
-                    // The card is removed as soon as the upload call
-                    // actually resolves, so once this reaches 1.0 it just
-                    // stays pinned full rather than switching to an
-                    // indeterminate "still working" animation.
-                    value: progress > 0 ? progress : null,
+                    // Reading every file byte is not the same as the server
+                    // having stored it. Show an active finishing state while
+                    // the app waits for the API response.
+                    value: processing ? null : (progress > 0 ? progress : null),
                     minHeight: 6,
                   ),
                 ),
+                if (processing) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Saving on server…',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ],
             ),
           ),
           const SizedBox(width: 12),
           Text(
-            '${(progress * 100).clamp(0, 100).floor()}%',
+            processing ? 'Saving' : '${(progress * 100).clamp(0, 100).floor()}%',
           ),
         ],
       ),
